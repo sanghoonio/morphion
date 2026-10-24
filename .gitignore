@@ -1,0 +1,15 @@
+# builds
+engine/build/
+mac/build/
+
+# rendered audio: regenerate with the scripts in scripts/
+scripts/renders/
+
+# python
+__pycache__/
+
+# macOS
+.DS_Store
+
+# reference recordings: download them yourself (sources in reference/recordings/README.md)
+reference/recordings/*.wav
