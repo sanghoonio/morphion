@@ -319,8 +319,49 @@ void Engine::configure(double sampleRate, const std::vector<double>& fieldFreqs,
     }
     noiseLeft_ = 0;
     slapLeft_ = 0;
+    for (auto& v : attacks_) v.on = false;
     noiseEnv_ = noiseHp_ = noiseLp_ = noisePrev_ = 0.0;
     noiseDecay_ = std::exp(-1.0 / (0.0015 * sampleRate));
+}
+
+void Engine::startAttack(int field, double level, double force, double contactMs) {
+    double a = attackLevel.load(std::memory_order_relaxed);
+    if (a <= 0.0 || force <= 0.0) return;
+    Attack* v = &attacks_[0];
+    for (auto& x : attacks_) {
+        if (!x.on) { v = &x; break; }
+        if (x.age > v->age) v = &x;   // all busy: replace the oldest
+    }
+    // Hertz-shortened contact, as in Field::strike: harder = shorter = brighter
+    double tau = std::max(0.3, contactMs * std::pow(std::max(force, 0.05) / 0.7, -0.2)) * 1e-3;
+    double f = std::clamp(force, 0.0, 1.0);
+    // attack relative to the tone, an S-curve over force: almost none for a light tap (< 0.18),
+    // rising steeply through moderate force, 1.5 from a firm hit (0.65) up (1 sits mid-range in
+    // the recordings, 2 at their bright end)
+    double u = std::clamp((f - 0.18) / (0.65 - 0.18), 0.0, 1.0), rel = 1.5 * u * u * (3.0 - 2.0 * u);
+    *v = Attack{};
+    v->on = true;
+    v->click = a * level * 0.045 * f * rel;                      // 0.045 * f * rel: set by ear against the recordings
+    v->clickDecay = std::exp(-1.0 / (tau * sr_));
+    v->lpA = 1.0 - std::exp(-2.0 * kPi * std::clamp(9000.0 * (1.2e-3 / tau), 4000.0, 14000.0) / sr_);
+
+    // shell modes: log-spaced 2-9 kHz, jittered per note so each field has its own shimmer
+    // the landing edge of the contact (skin, then bone on steel) is much sharper than its
+    // overall length: ~0.05 ms for a fingertip, sharper for harder hits
+    const double dt = 1.0 / sr_, sd = 0.05e-3 * (tau / 1.2e-3);
+    uint32_t h = 2654435761u * uint32_t(field + 1);
+    for (int k = 0; k < kAttackModes; ++k) {
+        h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+        double jitter = (h & 0xffff) / 65535.0 - 0.5;
+        double hz = 2000.0 * std::pow(4.5, (k + 0.5 + 0.8 * jitter) / kAttackModes);
+        double t60 = 0.45 * std::pow(2000.0 / hz, 0.9);          // ~0.45 s at 2 kHz, ~0.12 s at 9 kHz
+        double w = 2.0 * kPi * hz, s = kLn1000 / t60, d = std::sqrt(w * w - s * s);
+        double e = std::exp(-s * dt), c = std::cos(d * dt), sn = std::sin(d * dt);
+        v->prop[k] = {e * (c + s / d * sn), e * sn / d, -e * w * w / d * sn, e * (c - s / d * sn)};
+        v->w[k] = w;
+        double contact = std::exp(-0.5 * (w * sd) * (w * sd));     // spectrum of the landing edge
+        v->v[k] = a * level * 0.006 * f * rel * contact * w;      // impulse: displacement amplitude * w
+    }
 }
 
 void Engine::slap(double force) {
@@ -374,6 +415,7 @@ void Engine::handle(const Event& e) {
         for (auto& f : fingers_) if (f.on && f.id == e.finger) slot = &f;
         if (!slot) for (auto& f : fingers_) if (!f.on) { slot = &f; break; }
         fields_[e.field].strike(e.x, e.y, e.force, e.contactMs, e.radius);
+        startAttack(e.field, fields_[e.field].outLevel(), e.force, e.contactMs);
         if (slot) {
             *slot = {true, e.finger, e.field, e.x, e.y, e.radius, 0, 0.0f};
             updateRest(e.field);
@@ -435,15 +477,11 @@ void Engine::process(float* left, float* right, int frames) {
             if (src.asleep() || scale == 0.0) continue;
             Field& dst = fields_[l.dst];
             dst.wake();
-            double k = l.k * scale, s1 = src.q(0), s2 = src.q(1), l1 = dst.q(0);
-            if (l.order == 3) {          // V = -k q1 q2 l1
-                src.addForce(0, k * s2 * l1);
-                src.addForce(1, k * s1 * l1);
-                dst.addForce(0, k * s1 * s2);
-            } else {                     // V = -k q1^2 l1
-                src.addForce(0, 2.0 * k * s1 * l1);
-                dst.addForce(0, k * s1 * s1);
-            }
+            double k = l.k * scale, s1 = src.q(0), s2 = src.q(1);
+            // one way: the lower note drives the upper one, nothing pushes back. The push-back
+            // pumped the lower note parametrically (multi_field.py docstring).
+            if (l.order == 3) dst.addForce(0, k * s1 * s2);   // drive from V = -k q1 q2 l1
+            else dst.addForce(0, k * s1 * s1);                // drive from V = -k q1^2 l1
         }
         // Gu cavity: forces from the current state, stepped with the fields
         double fh = 0.0;
@@ -477,6 +515,29 @@ void Engine::process(float* left, float* right, int frames) {
             shellQ_[k] = q;
             shellV_[k] = v;
             s += v / shellOmega_[k];
+        }
+        for (auto& v : attacks_) {
+            if (!v.on) continue;
+            ++v.age;
+            double sum = 0.0;
+            if (v.click > 1e-8) {
+                attackSeed_ = attackSeed_ * 1664525u + 1013904223u;
+                double white = (attackSeed_ >> 8) / double(1 << 24) * 2.0 - 1.0;
+                v.hp = 0.75 * (v.hp + white - v.prev);   // high-pass, ~2.2 kHz at 48 kHz
+                v.prev = white;
+                v.lp += v.lpA * (v.hp - v.lp);           // low-pass: brighter for shorter contacts
+                sum += v.lp * v.click;
+                v.click *= v.clickDecay;
+            }
+            for (int k = 0; k < kAttackModes; ++k) {
+                const auto& m = v.prop[k];
+                double q = m[0] * v.q[k] + m[1] * v.v[k], vel = m[2] * v.q[k] + m[3] * v.v[k];
+                v.q[k] = q;
+                v.v[k] = vel;
+                sum += vel / v.w[k];
+            }
+            s += sum;
+            if (v.age > int(1.0 * sr_)) v.on = false;    // the slowest mode is ~60 dB down by 1 s
         }
         if (noiseLeft_ > 0) {
             noiseSeed_ = noiseSeed_ * 1664525u + 1013904223u;

@@ -17,8 +17,13 @@ the listener swell in and peak after about 1 / (2 gap) (plans/2026-10-24-cross-f
       (the chain from scripts/sympathetic_test.py, 3c).
 - 2x: V = -k2x q1^2 l1, the source's fundamental squared drives it directly.
 
-k3x and k2x are in units of the source's omega_1^2. Back-reaction on the source
-is included, so the links move energy without adding it. Each field's output is
+k3x and k2x are in units of the source's omega_1^2. The links drive one way: the
+lower note drives the upper one and nothing pushes back. With the push-back
+(the energy-conserving form), a ringing upper note pumps the lower note's
+fundamental and octave parametrically (440 = 147 + 294 Hz for the ding and A4):
+repeated A4 hits brought a soft ding tail from -96 dB up to -28 dB, louder than
+A4 itself. The coupling strengths were set by ear for the forward swell, so the
+reverse effect was far stronger than anything plausible. Each field's output is
 divided by omega_1^(1 - RADIATION_TILT) * omega_ref^RADIATION_TILT, as in the
 engine: tilt 0 makes every struck note equally loud in level; a negative tilt
 makes lower fields louder, so they sound as loud as the higher ones (the ear is
@@ -39,9 +44,9 @@ from one_field import LN1000, Params, Strike, default_modes, note_to_hz, write_w
 
 OUT = Path(__file__).parent / "renders" / "multi_field"
 TOL_CENTS = 30.0
-GAP_HZ = 1.3       # 3x listener below the harmonic (A4 -3.2 c): swell peaks ~230 ms with K3X 0.2
+GAP_HZ = 2.4       # 3x listener below the harmonic (A4 -7.5 c): with one-way links the swell peaks ~265 ms
 GAP_2X_HZ = 0.45   # 2x listener (D4): 2.7 cents flat, swell peaks ~430 ms; chosen by ear
-K3X = 0.2          # raised from 3c's level (0.116) to keep the A4 swell at ~-30 dB with the tilt below
+K3X = 0.16         # A4 swell ~-29 dB after a ding strike (one-way links, tilt below)
 K2X = 0.02         # 2x: D4 swell ~ -20 dB at ~290 ms after a ding strike; untested by ear
 
 RADIATION_TILT = -0.1  # lower fields slightly louder (D3 +0.9 dB vs G4), set by ear on headphones
@@ -149,11 +154,12 @@ def layout(freqs, gap_hz=GAP_HZ, gap_2x_hz=GAP_2X_HZ, k3x=K3X, k2x=K2X, tol_cent
 
 
 def render(freqs, links, strikes, seconds, p: Params = Params(), out_omega=None, tilt=None, gu: Gu | None = None,
-           gu_tune=True):
+           gu_tune=True, reaction=False):
     """strikes: [(onset s, field index, Strike)]. Returns the mono mix.
 
     gu_tune: detune fields and cavity (gu_detune) so they sound at freqs and gu.f with
-    the coupling in place. Without it the cavity pulls the ding ~14 cents sharp.
+    the coupling in place. reaction: include the links' push-back on the source (only to
+    compare with tuning_options.py, which had it). Without it the cavity pulls the ding ~14 cents sharp.
 
     out_omega: divide every field's output by this instead of its own omega_1
     (only to compare with tuning_options.py, which used the ding's).
@@ -239,13 +245,15 @@ def render(freqs, links, strikes, seconds, p: Params = Params(), out_omega=None,
             if fs is None:
                 continue
             s1, s2, l1 = fields[src]["q"][0], fields[src]["q"][1], fields[dst]["q"][0]
-            if order == 3:     # V = -k q1 q2 l1
-                fs[0] += k * s2 * l1
-                fs[1] += k * s1 * l1
+            if order == 3:     # drive from V = -k q1 q2 l1
                 fl[0] += k * s1 * s2
-            else:              # V = -k q1^2 l1
-                fs[0] += 2 * k * s1 * l1
+                if reaction:
+                    fs[0] += k * s2 * l1
+                    fs[1] += k * s1 * l1
+            else:              # drive from V = -k q1^2 l1
                 fl[0] += k * s1 * s1
+                if reaction:
+                    fs[0] += 2 * k * s1 * l1
 
         fh = 0.0
         if gu is not None:
@@ -325,7 +333,7 @@ def check():
     pad = Strike(x=0.0, y=0.05, force=0.7, contact_ms=1.5, radius=0.2)
     tip = Strike(x=0.2, y=0.1, force=0.6)
     mine = render([T.DING, a4], [Link(0, 1, 3, T.C12)], [(0.0, 0, pad), (1.3, 1, tip), (2.6, 0, pad)],
-                  1.2, Params(kappa_oct=T.KAPPA, kappa_12=T.KAPPA), out_omega=2 * math.pi * T.DING)
+                  1.2, Params(kappa_oct=T.KAPPA, kappa_12=T.KAPPA), out_omega=2 * math.pi * T.DING, reaction=True)
     print(f"D3/A4 pair vs tuning_options c: max |diff| {np.abs(yref - mine).max():.2e}")
 
     # the C++ engine, if built (make -C engine)

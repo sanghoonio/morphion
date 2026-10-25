@@ -35,10 +35,10 @@ struct FieldParams {
 // (harmonic - gap) and driven by it, so it swells in after a strike on the
 // lower field and peaks after about 1 / (2 gap).
 struct CouplingParams {
-    double gapHz = 1.3;      // 3x pairs: ~230 ms peak with k3x 0.2
+    double gapHz = 2.4;      // 3x pairs: ~265 ms peak (one-way links)
     double gap2xHz = 0.45;   // 2x pairs: ~430 ms peak, 2.7 cents flat on D4
-    double k3x = 0.2;        // V = -k q1 q2 l1, units of the source's omega_1^2
-    double k2x = 0.02;       // V = -k q1^2 l1
+    double k3x = 0.16;       // drive from V = -k q1 q2 l1, units of the source's omega_1^2
+    double k2x = 0.02;       // drive from V = -k q1^2 l1
     double tolCents = 30.0;
 };
 
@@ -88,6 +88,7 @@ public:
     bool asleep() const { return asleep_; }
     double q(int mode) const { return q_[mode]; }
     double omega1() const { return w1_; }
+    double outLevel() const { return outScale_ * w1_; }   // output per unit modal amplitude
 
     double contactSigmaScale(double radius) const;
     const FieldParams& params() const { return p_; }
@@ -168,13 +169,14 @@ public:
     std::atomic<float> restFloor{0.15f};     // damping anywhere on the field, as a fraction of the centre's
     // A trackpad tap keeps the finger down 40-75 ms where steel would bounce it off in 1-2 ms,
     // so a resting finger only starts muting after a grace period, then fades in.
-    float restGraceMs = 150.0f;
-    float restRampMs = 100.0f;
+    float restGraceMs = 100.0f;
+    float restRampMs = 80.0f;
     // Peak limiter on the mix: looks 1.5 ms ahead and turns the gain down smoothly before a
     // peak would pass the ceiling, recovering over ~150 ms. It changes level only, so it
     // adds no new tones (a waveshaper made intermodulation buzz on stacked notes).
     bool limiter = true;
     std::atomic<float> coupling{1.0f};   // scales every link; settable from any thread
+    std::atomic<float> attackLevel{1.0f};    // scales the strike click and shimmer (force-weighted), 0 = off
     std::atomic<float> radiationTilt{0.0f};   // live override of FieldParams::radiationTilt
     int fieldCount() const { return static_cast<int>(fields_.size()); }
     double fieldFreq(int i) const { return heard_[i]; }   // pitch heard, after link retuning
@@ -205,6 +207,22 @@ private:
     void setGuTilt(double tilt);
     GuParams gu_;
     double sr_ = 48000.0;
+    // Strike attack: finger on metal. A click of filtered noise as long as the contact, then a
+    // shimmer from 16 high, inharmonic shell modes (2-9 kHz, different for each note, filtered
+    // by the contact like the note's own modes). In the recordings this band (2.5-12 kHz) starts
+    // ~20-36 dB under the tone, holds ~-35 to -45 dB for ~25 ms and is ~-50 dB at 100 ms.
+    static constexpr int kAttackModes = 16;
+    struct Attack {
+        bool on = false;
+        int age = 0;
+        double click = 0, clickDecay = 0, lpA = 0, hp = 0, lp = 0, prev = 0;
+        std::array<std::array<double, 4>, kAttackModes> prop{};
+        std::array<double, kAttackModes> q{}, v{}, w{};
+    };
+    std::array<Attack, 8> attacks_{};
+    uint32_t attackSeed_ = 987654321u;
+    void startAttack(int field, double level, double force, double contactMs);
+
     bool guOn_ = false;      // cavity coupled to the fields
     bool guOsc_ = false;     // cavity oscillator exists (also rung by slaps when uncoupled)
 

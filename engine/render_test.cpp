@@ -4,6 +4,7 @@
 //   make -C engine && engine/build/render_test out.wav [x y force contact_ms radius note_hz]
 //   engine/build/render_test --kurd out.wav [field seconds]
 //   engine/build/render_test --slap out.wav [alone|phrase]
+//   engine/build/render_test --attack out.wav LEVEL [ding|phrase|sweep]
 //
 // The first form renders one Field (compare with one_field.py). --kurd renders
 // one strike on the D Kurd 9 layout through the Engine with cross-field links
@@ -55,6 +56,7 @@ static int kurd(int argc, char** argv) {
     engine.limiter = false;
     engine.gain = 1.0f;
     engine.restStrength = 0.0f;   // multi_field.py has no resting finger
+    engine.attackLevel = 0.0f;    // ... and no strike noise
     for (const auto& l : engine.links())
         std::printf("link %d -> %d (%dx), listener now %.3f Hz\n", l.src, l.dst, l.order, engine.fieldFreq(l.dst));
 
@@ -105,8 +107,48 @@ static int slapDemo(int argc, char** argv) {
     return 0;
 }
 
+// Strikes with the attack (click + shimmer) at LEVEL (1 = default), app levels, limiter on.
+static int attackDemo(int argc, char** argv) {
+    if (argc < 4) { std::fprintf(stderr, "usage: %s --attack out.wav LEVEL [ding|phrase]\n", argv[0]); return 1; }
+    float level = float(std::atof(argv[3]));
+    std::string mode = argc > 4 ? argv[4] : "ding";
+    bool phrase = mode == "phrase", sweep = mode == "sweep";
+    const int sr = 48000;
+    const std::vector<double> grid = {349.23, 440.00, 392.00, 293.66, 146.83, 329.63, 233.08, 220.00, 261.63};
+    morphion::Engine engine;
+    engine.configure(sr, grid, morphion::FieldParams{});
+    engine.attackLevel = level;
+    struct Hit { double t; int field; float force, contactMs; };
+    // contact times follow the app's force mapping (1.6 ms soft -> 0.9 ms hard)
+    auto ms = [](float f) { return 1.6f - 0.7f * (f - 0.1f) / 0.9f; };
+    std::vector<Hit> hits;
+    if (phrase)
+        hits = {{0.0, 4, 0.6f, ms(0.6f)}, {0.6, 7, 0.4f, ms(0.4f)}, {1.0, 6, 0.4f, ms(0.4f)}, {1.4, 3, 0.7f, ms(0.7f)},
+                {1.8, 5, 0.5f, ms(0.5f)}, {2.2, 1, 0.9f, ms(0.9f)}, {2.8, 4, 0.9f, ms(0.9f)}, {3.4, 0, 0.3f, ms(0.3f)}};
+    else if (sweep)   // the D4 note, light to full, one second apart
+        for (float f : {0.15f, 0.3f, 0.5f, 0.7f, 0.85f, 1.0f}) hits.push_back({double(hits.size()), 3, f, ms(f)});
+    else
+        hits = {{0.02, 4, 0.7f, 1.5f}};
+    double seconds = phrase ? 5.5 : sweep ? 6.5 : 1.5;
+    std::vector<float> out(size_t(seconds * sr)), buf(64);
+    size_t next = 0;
+    for (size_t n = 0; n < out.size(); n += 64) {
+        while (next < hits.size() && hits[next].t * sr <= n) {
+            const Hit& h = hits[next++];
+            engine.push({morphion::Event::Down, int(next), h.field, 0.15f, 0.1f, h.force, h.contactMs, 0.12f});
+            engine.push({morphion::Event::Up, int(next), 0, 0, 0, 0, 0, 0});
+        }
+        engine.process(buf.data(), nullptr, 64);
+        std::copy(buf.begin(), buf.begin() + std::min<size_t>(64, out.size() - n), out.begin() + n);
+    }
+    writeWav(argv[2], out, sr);
+    std::printf("wrote %s\n", argv[2]);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--kurd") return kurd(argc, argv);
+    if (argc > 1 && std::string(argv[1]) == "--attack") return attackDemo(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--slap") return slapDemo(argc, argv);
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s out.wav [x y force contact_ms radius note_hz]\n", argv[0]);

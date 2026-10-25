@@ -4,7 +4,7 @@
 //   mac/build/morphion [--layout grid|single] [--probe] [--mute 0.6] [--mute-floor 0.15]
 //            [--size-soft 0.2] [--size-hard 1.3] [--force-curve 1.15] [--major-ref 10]
 //            [--gain 1.0] [--buffer 128]
-//            [--coupling 1.0] [--gap 1.3] [--gap-2x 0.45] [--tilt -0.1]
+//            [--coupling 1.0] [--gap 2.4] [--gap-2x 0.45] [--tilt -0.1]
 //            [--gu 0.2] [--gu-hz 80]
 //   mac/build/morphion --snapshot DIR   # draw the canvas to DIR/idle.png and playing.png, exit
 //
@@ -96,7 +96,7 @@ struct Config {
     float hardMs = 0.9f;     // ... and for the hardest (engine adds Hertz scaling on top)
     float majorRef = 10.0f;  // major axis of a typical fingertip (sets contact radius)
     int buffer = 128;
-    double gap = 1.3;        // Hz below the source's 3rd harmonic that a listener is tuned to
+    double gap = 2.4;        // Hz below the source's 3rd harmonic that a listener is tuned to
     double gap2x = 0.45;     // same for 2nd-harmonic pairs
     double guHz = 80.0;      // cavity pitch: ~85 free, ~73 on the lap
 };
