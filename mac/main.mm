@@ -6,7 +6,7 @@
 //            [--gain 1.0] [--buffer 128]
 //            [--coupling 1.0] [--gap 2.4] [--gap-2x 0.45] [--tilt -0.1]
 //            [--gu 0.2] [--gu-hz 80]
-//   mac/build/morphion --snapshot DIR   # draw the canvas to DIR/idle.png and playing.png, exit
+//   mac/build/morphion --snapshot DIR   # draw the canvas to DIR/idle.png, playing.png, settings.png, error.png, exit
 //   mac/build/morphion --frames DIR     # run the engine offline, draw 60 fps frames of a few strikes to DIR
 //
 // Play (or Return) starts playing: the cursor is frozen and hidden so taps land here.
@@ -104,9 +104,8 @@ struct Config {
 static Config g_cfg;
 
 // User settings: the settings pane edits these and they persist between launches
-// (NSUserDefaults, domain "morphion": the bundle identifier and the bare executable's
-// name agree, so the app and the build/morphion symlink share them). Command-line flags
-// override them for one run.
+// (NSUserDefaults, domain kDefaults, named explicitly so the app and the build/morphion
+// symlink share them). Command-line flags override them for one run.
 struct Settings {
     int scale = 0;           // index into kScales
     int key = 5;             // index into kKeys: D
@@ -184,8 +183,20 @@ static NSString* layoutTitle() {
                                       g_set.single ? " (single note)" : ""];
 }
 
+static NSString* const kDefaults = @"io.github.sanghoonio.morphion";   // the bundle identifier
+
+static NSUserDefaults* defaults() {
+    static NSUserDefaults* d = [[NSUserDefaults alloc] initWithSuiteName:kDefaults];
+    return d;
+}
+
 static void loadSettings() {
-    NSUserDefaults* d = NSUserDefaults.standardUserDefaults;
+    NSUserDefaults* d = defaults();
+    // settings saved before the bundle identifier changed lived under "morphion"
+    if (![d objectForKey:@"scale"]) {
+        NSDictionary* old = [NSUserDefaults.standardUserDefaults persistentDomainForName:@"morphion"];
+        for (NSString* k in old) [d setObject:old[k] forKey:k];
+    }
     if (![d objectForKey:@"scale"]) return;
     g_set.scale = std::clamp(int([d integerForKey:@"scale"]), 0, kScaleCount - 1);
     g_set.key = std::clamp(int([d integerForKey:@"key"]), 0, 11);
@@ -200,7 +211,7 @@ static void loadSettings() {
 }
 
 static void saveSettings() {
-    NSUserDefaults* d = NSUserDefaults.standardUserDefaults;
+    NSUserDefaults* d = defaults();
     [d setInteger:g_set.scale forKey:@"scale"];
     [d setInteger:g_set.key forKey:@"key"];
     [d setBool:g_set.single forKey:@"single"];
@@ -236,6 +247,11 @@ static const CGFloat kTitlebar = 52;   // the content runs under the transparent
 
 static std::atomic<bool> g_captured{false};
 
+// Set when the app can't play (no trackpad, no multitouch support, no audio): the window
+// opens anyway and shows this instead of the pan, so a double-clicked app doesn't just vanish.
+struct StartupError { NSString* title; NSString* detail; };
+static StartupError g_error{nil, nil};
+
 struct UiTouch { float nx, ny, major, minor, angle, size; int state; };
 static std::mutex g_uiMutex;
 static std::vector<UiTouch> g_uiTouches;
@@ -246,7 +262,8 @@ static std::array<float, 9> g_round{};      // how far each note's outline has r
 static bool g_roundPreview = false;         // --snapshot sets g_round directly (no audio)
 static double g_clock = -1.0;               // --frames runs on its own clock
 static int g_waves = 4;                     // ripple waves round a note for the fundamental (x2, x3 for octave, twelfth)
-static double g_wobbleDiv = 40.0;           // ripple speed = mode frequency / this
+static double g_wobbleDiv = 40.0;           // ripple speed: the ding's fundamental swings at 146.83 Hz / this
+static double g_wobbleExp = 1.0 / 3.0;      // how ripple speed follows pitch: 1 proportional, 0.5 sqrt, 0 the same for all
 static double nowSec() { return g_clock >= 0.0 ? g_clock : CFAbsoluteTimeGetCurrent(); }
 
 // ---------------------------------------------------------------- touch handling (MT thread)
@@ -679,6 +696,7 @@ static void drawPane(NSRect b) {
 }
 
 - (void)mouseMoved:(NSEvent*)e {
+    if (g_error.title) return;
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
     NSRect play, gear;
     startRects(self.bounds, &play, &gear);
@@ -707,7 +725,7 @@ static void drawPane(NSRect b) {
 
 - (void)mouseDown:(NSEvent*)e {
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
-    if (p.y > self.bounds.size.height - kTitlebar) {   // the strip under the title bar drags the window
+    if (g_error.title || p.y > self.bounds.size.height - kTitlebar) {   // the strip under the title bar drags the window
         [self.window performWindowDragWithEvent:e];
         return;
     }
@@ -757,6 +775,7 @@ static void drawPane(NSRect b) {
 }
 
 - (void)keyDown:(NSEvent*)e {
+    if (g_error.title) return;
     if (e.keyCode == 53) {   // Esc: close settings, or stop playing
         if (self.settingsOpen) [self closeSettings];
         else setCaptured(false, self.window);
@@ -837,15 +856,15 @@ static double roundnessFor(float level) {
     return 0.85 * (0.44 * std::pow(x, 1.6) + 0.56 * std::pow(x, 12.0));
 }
 
-// Wobble size in points for one mode's level, on the same dB scale.
+// Ripple size in points for one mode's level: nothing at -60 dB, maxPts at -4 dB.
 static double wobbleFor(float level, double maxPts) {
     double db = 20.0 * std::log10(level + 1e-9);
-    return maxPts * std::pow(std::clamp((db + 50.0) / 46.0, 0.0, 1.0), 1.5);
+    return maxPts * std::pow(std::clamp((db + 60.0) / 56.0, 0.0, 1.0), 1.5);
 }
 
 // The canvas: clean outlines, no gradients. Each note is a rounded-rectangle outline
 // inside its grid cell (its hit area is the full cell). A strike fills that note in
-// solid amber, stronger for harder hits, fading out; touches are outlined ellipses.
+// solid amber, stronger for harder hits, fading out; touches show a patch of dot mesh.
 // While a note rings (struck or in sympathy) its outline rounds towards an ellipse.
 - (void)drawRect:(NSRect)dirty {
     NSRect b = self.bounds;
@@ -856,6 +875,26 @@ static double wobbleFor(float level, double maxPts) {
 
     [ink() setFill];
     NSRectFill(b);
+
+    if (g_error.title) {   // can't play: say why, centred, in place of the pan
+        NSMutableParagraphStyle* centred = [NSMutableParagraphStyle new];
+        centred.alignment = NSTextAlignmentCenter;
+        NSDictionary* head = @{NSFontAttributeName : [NSFont systemFontOfSize:22 weight:NSFontWeightSemibold],
+                               NSForegroundColorAttributeName : [NSColor colorWithWhite:0.92 alpha:1],
+                               NSParagraphStyleAttributeName : centred};
+        NSDictionary* body = @{NSFontAttributeName : [NSFont systemFontOfSize:15],
+                               NSForegroundColorAttributeName : [NSColor colorWithWhite:0.62 alpha:1],
+                               NSParagraphStyleAttributeName : centred};
+        CGFloat w = std::min<CGFloat>(440, b.size.width - 80);
+        NSRect hr = [g_error.title boundingRectWithSize:NSMakeSize(w, 1000) options:NSStringDrawingUsesLineFragmentOrigin attributes:head];
+        NSRect br = [g_error.detail boundingRectWithSize:NSMakeSize(w, 1000) options:NSStringDrawingUsesLineFragmentOrigin attributes:body];
+        CGFloat gap = 12, total = hr.size.height + gap + br.size.height, top = NSMidY(b) + total / 2;
+        [g_error.title drawWithRect:NSMakeRect(NSMidX(b) - w / 2, top - hr.size.height, w, hr.size.height)
+                            options:NSStringDrawingUsesLineFragmentOrigin attributes:head];
+        [g_error.detail drawWithRect:NSMakeRect(NSMidX(b) - w / 2, top - hr.size.height - gap - br.size.height, w, br.size.height)
+                             options:NSStringDrawingUsesLineFragmentOrigin attributes:body];
+        return;
+    }
 
     // while playing, a quiet reminder of the way out, centred in the title bar
     if (live) {
@@ -886,17 +925,21 @@ static double wobbleFor(float level, double maxPts) {
                 double target = live ? roundnessFor(g_engine.fieldLevel(field)) : 0.0;
                 g_round[field] += float((target - g_round[field]) * (target > g_round[field] ? 0.6 : 0.2));
             }
-            // ripple: each mode swings at its real frequency slowed by g_wobbleDiv (the ding's
-            // fundamental at ~3.7 Hz, F4's at ~8.7), so higher notes shimmer faster and the 1:2:3
-            // of fundamental, octave and twelfth holds. Capped at 20 Hz, three frames a cycle at
-            // 60 fps; faster would alias into a slow crawl. Each note starts at its own phase.
+            // ripple: each mode swings at a slowed copy of its frequency, keeping the 1:2:3 of
+            // fundamental, octave and twelfth. Across notes the speed follows pitch^g_wobbleExp
+            // (cube root: ding fundamental at 146.83 / g_wobbleDiv = 3.7 Hz, F4 at 4.9), so higher
+            // notes shimmer faster without blurring: the eye stops seeing small motion near 15-20 Hz.
+            // Capped at 15 Hz, four frames a cycle. Each note starts at its own phase.
+            // Size goes as sqrt(D4 / pitch): steel at equal loudness moves further on lower notes
+            // (as 1 / pitch); the square root keeps high notes visible (ding 1.41x, F4 0.92x).
             double d0 = 0, d1 = 0, d2 = 0;
             if (live && field < g_engine.fieldCount()) {
-                double f1 = g_engine.fieldFreq(field) / g_wobbleDiv, off = field * 1.7;
-                auto swing = [&](int n) { return std::sin(2 * M_PI * std::min(n * f1, 20.0) * now + n * off); };
-                d0 = wobbleFor(g_engine.modeLevel(field, 0), 1.5) * swing(1);
-                d1 = wobbleFor(g_engine.modeLevel(field, 1), 2.5) * swing(2);
-                d2 = wobbleFor(g_engine.modeLevel(field, 2), 2.0) * swing(3);
+                double hz = g_engine.fieldFreq(field), f1 = 146.83 * std::pow(hz / 146.83, g_wobbleExp) / g_wobbleDiv, off = field * 1.7;
+                double size = std::sqrt(293.66 / hz);
+                auto swing = [&](int n) { return std::sin(2 * M_PI * std::min(n * f1, 15.0) * now + n * off); };
+                d0 = wobbleFor(g_engine.modeLevel(field, 0), 1.5 * size) * swing(1);
+                d1 = wobbleFor(g_engine.modeLevel(field, 1), 2.5 * size) * swing(2);
+                d2 = wobbleFor(g_engine.modeLevel(field, 2), 2.0 * size) * swing(3);
             }
             NSBezierPath* note = morphedNote(fr, rad, g_round[field], d0, d1, d2);
             if (glow > 0.003) {
@@ -958,7 +1001,7 @@ static double wobbleFor(float level, double maxPts) {
 
     if (self.settingsOpen) drawPane(b);
 
-    // live touches in contact: amber outlines; only while playing
+    // live touches in contact: a patch of dot mesh; only while playing
     std::vector<UiTouch> touches;
     if (live) {
         std::lock_guard<std::mutex> lock(g_uiMutex);
@@ -969,15 +1012,30 @@ static double wobbleFor(float level, double maxPts) {
         CGFloat rx = std::max(4.0f, t.major * 2.0f), ry = std::max(4.0f, t.minor * 2.0f);
         bool contact = (t.state == 3 || t.state == 4);
         if (!contact) continue;   // hovering fingers aren't drawn
-        // an amber outline in the touch's shape, the notes' line weight
-        NSAffineTransform* tf = [NSAffineTransform transform];
-        [tf translateXBy:x yBy:y];
-        [tf rotateByRadians:t.angle];
-        NSBezierPath* p = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(-rx, -ry, 2 * rx, 2 * ry)];
-        [p transformUsingAffineTransform:tf];
-        [amber() setStroke];
-        p.lineWidth = 2.0;
-        [p stroke];
+        // a dot mesh fixed to the pad shows through where the finger presses, at full strength
+        // inside 0.6x the touch's ellipse and fading out by 1.95x its size. With pull > 0 the mesh
+        // dents: dots are pulled towards the middle (most at the centre, none beyond the fade).
+        const CGFloat step = 5.0, reach = 1.95, pull = 0.0;   // pull > 0 dents the mesh (0.1 subtle)
+        const double ca = std::cos(t.angle), sa = std::sin(t.angle);
+        CGFloat R = std::max(rx, ry) * reach;
+        long i0 = long(std::floor((x - R - pad.origin.x) / step)), i1 = long(std::ceil((x + R - pad.origin.x) / step));
+        long j0 = long(std::floor((y - R - pad.origin.y) / step)), j1 = long(std::ceil((y + R - pad.origin.y) / step));
+        for (long i = i0; i <= i1; ++i) {
+            for (long j = j0; j <= j1; ++j) {
+                CGFloat gx = pad.origin.x + i * step, gy = pad.origin.y + j * step;
+                double dx = gx - x, dy = gy - y;
+                double lx = dx * ca + dy * sa, ly = -dx * sa + dy * ca;   // into the touch's own axes
+                double d = std::hypot(lx / rx, ly / ry);
+                if (d >= reach) continue;
+                double k = std::clamp((reach - d) / (reach - 0.6), 0.0, 1.0);
+                k = k * k * (3 - 2 * k);
+                double squeeze = 1.0 - pull * std::exp(-d * d / 0.8) * (1.0 - d / reach);
+                CGFloat px = x + dx * squeeze, py = y + dy * squeeze;
+                CGFloat r = 0.5 + 0.6 * k;
+                [[NSColor colorWithWhite:1 alpha:0.9 * k] setFill];
+                [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(px - r, py - r, 2 * r, 2 * r)] fill];
+            }
+        }
     }
 }
 @end
@@ -1033,7 +1091,7 @@ static void usage() {
                  "usage: morphion [--layout grid|single] [--probe] [--mute X] [--mute-floor X] [--size-soft X] [--size-hard X]\n"
                  "                [--force-curve X] [--soft-ms X] [--hard-ms X] [--major-ref X]\n"
                  "                [--gain X] [--buffer N] [--coupling X] [--gap HZ] [--gap-2x HZ]\n"
-                 "                [--tilt X] [--gu X] [--gu-hz HZ] [--snapshot DIR] [--frames DIR] [--waves N] [--wobble-div X]\n");
+                 "                [--tilt X] [--gu X] [--gu-hz HZ] [--snapshot DIR] [--frames DIR] [--waves N] [--wobble-div X] [--wobble-exp X]\n");
 }
 
 // Draw the canvas offscreen to <dir>/idle.png and <dir>/playing.png and exit (no audio,
@@ -1064,6 +1122,10 @@ static int snapshot(const char* dir) {
     g_captured = false;
     view.settingsOpen = true;
     save(@"settings.png");
+    view.settingsOpen = false;
+    g_error = {@"No trackpad found", @"morphion is played on a trackpad. Connect a Magic Trackpad and open morphion again."};
+    save(@"error.png");
+    g_error = {nil, nil};
     return 0;
 }
 
@@ -1155,18 +1217,27 @@ int main(int argc, char** argv) {
         else if (a == "--snapshot") { const char* dir = next(); return snapshot(dir); }
         else if (a == "--waves") g_waves = std::max(1, std::atoi(next()));
         else if (a == "--wobble-div") g_wobbleDiv = std::max(1.0, std::atof(next()));
+        else if (a == "--wobble-exp") g_wobbleExp = std::atof(next());
         else if (a == "--frames") { const char* dir = next(); return frames(dir); }
         else { usage(); return 1; }
     }
     for (int i = 0; i < 9; ++i) { g_flashTime[i] = 0.0; g_flashForce[i] = 0.0f; }
     buildLayout();
 
-    if (!loadMultitouch()) return 1;
-    g_mtDev = MTDeviceCreateDefault();
-    if (!g_mtDev) { std::fprintf(stderr, "no multitouch device\n"); return 1; }
-    if (!startAudio()) { std::fprintf(stderr, "audio start failed\n"); return 1; }
-    MTRegisterContactFrameCallback(g_mtDev, touchCallback);
-    MTDeviceStart(g_mtDev, 0);
+    if (!loadMultitouch()) {
+        g_error = {@"Can't read the trackpad",
+                   @"morphion couldn't load macOS's multitouch support. This version of macOS may not be supported."};
+    } else if (!(g_mtDev = MTDeviceCreateDefault())) {
+        std::fprintf(stderr, "no multitouch device\n");
+        g_error = {@"No trackpad found", @"morphion is played on a trackpad. Connect a Magic Trackpad and open morphion again."};
+    } else if (!startAudio()) {
+        std::fprintf(stderr, "audio start failed\n");
+        g_mtDev = nullptr;   // never started, nothing to stop
+        g_error = {@"No sound output", @"morphion couldn't start audio. Check your sound output in System Settings and open morphion again."};
+    } else {
+        MTRegisterContactFrameCallback(g_mtDev, touchCallback);
+        MTDeviceStart(g_mtDev, 0);
+    }
 
     @autoreleasepool {
         NSApplication* app = [NSApplication sharedApplication];

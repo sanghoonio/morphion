@@ -25,7 +25,18 @@ build/morphion: $(EXE)
 	@rm -f $@
 	ln -s morphion.app/Contents/MacOS/morphion $@
 
+# A zip for a GitHub release: the bundle signed ad hoc as a whole (the linker signs only the
+# executable, which macOS reports as "damaged" once downloaded), zipped with ditto.
+VERSION := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Info.plist)
+ZIP = build/morphion-$(VERSION)-macos.zip
+
+release: all
+	codesign --force --deep --sign - $(APP)
+	@rm -f $(ZIP)
+	ditto -c -k --keepParent $(APP) $(ZIP)
+	@echo "wrote $(ZIP)"
+
 clean:
 	rm -rf build
 
-.PHONY: all clean
+.PHONY: all clean release

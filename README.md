@@ -2,20 +2,22 @@
 
 A handpan you play on a Mac trackpad. The sound comes from a physical model of the steel, and each finger's contact sets where, how hard and how long the note is struck.
 
-## Requirements
+## Install
 
-- macOS 13 or later, with a multitouch trackpad (built in or Magic Trackpad)
-- Xcode command line tools (`clang++`, `make`)
-- [uv](https://docs.astral.sh/uv/) for the Python scripts (optional)
+Download `morphion-<version>-macos.zip` from [Releases](https://github.com/sanghoonio/morphion/releases), unzip it and move `morphion.app` to Applications. It needs an Apple silicon Mac with macOS 13 or later and has been tested on macOS 15.
 
-## Build and run
+The app isn't notarized by Apple, so macOS blocks it the first time. Open it once, then go to System Settings → Privacy & Security and click Open Anyway next to the message about morphion.
+
+## Build from source
+
+Needs the Xcode command line tools (`clang++`, `make`), and [uv](https://docs.astral.sh/uv/) for the Python scripts (optional).
 
 ```
 make -C mac
 open mac/build/morphion.app
 ```
 
-`mac/build/morphion` links to the app's executable, for running it with command-line flags (`--probe` prints raw touch data; see the top of `mac/main.mm` for the rest).
+`mac/build/morphion` links to the app's executable, for running it with command-line flags (`--probe` prints raw touch data; see the top of `mac/main.mm` for the rest). `make -C mac release` signs the bundle ad hoc and zips it to `mac/build/morphion-<version>-macos.zip` for a release.
 
 ## Playing
 

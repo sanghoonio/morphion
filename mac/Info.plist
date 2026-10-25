@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>morphion</string>
 	<key>CFBundleIdentifier</key>
-	<string>morphion</string>
+	<string>io.github.sanghoonio.morphion</string>
 	<key>CFBundleExecutable</key>
 	<string>morphion</string>
 	<key>CFBundleIconFile</key>
