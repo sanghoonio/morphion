@@ -5,6 +5,7 @@
 //   engine/build/render_test --kurd out.wav [field seconds]
 //   engine/build/render_test --slap out.wav [alone|phrase]
 //   engine/build/render_test --attack out.wav LEVEL [ding|phrase|sweep] [seconds]
+//   engine/build/render_test --stereo out.wav [WIDTH]
 //
 // The first form renders one Field (compare with one_field.py). --kurd renders
 // one strike on the D Kurd 9 layout through the Engine with cross-field links
@@ -21,14 +22,15 @@
 #include <string>
 #include <vector>
 
-static void writeWav(const char* path, const std::vector<float>& y, int sr) {
+// 16-bit WAV; with channels = 2, y holds interleaved left/right samples
+static void writeWav(const char* path, const std::vector<float>& y, int sr, uint16_t channels = 1) {
     FILE* f = std::fopen(path, "wb");
     if (!f) { std::perror(path); std::exit(1); }
     uint32_t dataBytes = static_cast<uint32_t>(y.size() * 2);
     auto u32 = [&](uint32_t v) { std::fwrite(&v, 4, 1, f); };
     auto u16 = [&](uint16_t v) { std::fwrite(&v, 2, 1, f); };
     std::fwrite("RIFF", 1, 4, f); u32(36 + dataBytes); std::fwrite("WAVE", 1, 4, f);
-    std::fwrite("fmt ", 1, 4, f); u32(16); u16(1); u16(1); u32(sr); u32(sr * 2); u16(2); u16(16);
+    std::fwrite("fmt ", 1, 4, f); u32(16); u16(1); u16(channels); u32(sr); u32(sr * 2 * channels); u16(2 * channels); u16(16);
     std::fwrite("data", 1, 4, f); u32(dataBytes);
     for (float s : y) {
         int16_t v = static_cast<int16_t>(std::lround(std::fmax(-1.0, std::fmin(1.0, s)) * 32767));
@@ -146,10 +148,44 @@ static int attackDemo(int argc, char** argv) {
     return 0;
 }
 
+// A phrase across the grid in stereo at WIDTH (the app's default 0.5), app levels, limiter on:
+// notes in the left and right columns sit to the sides, the ding in the middle.
+static int stereoDemo(int argc, char** argv) {
+    if (argc < 3) { std::fprintf(stderr, "usage: %s --stereo out.wav [WIDTH]\n", argv[0]); return 1; }
+    const int sr = 48000;
+    const std::vector<double> grid = {349.23, 440.00, 392.00, 293.66, 146.83, 329.63, 233.08, 220.00, 261.63};
+    morphion::Engine engine;
+    engine.configure(sr, grid, morphion::FieldParams{});
+    for (int i = 0; i < 9; ++i) engine.setFieldPan(i, float(i % 3 - 1));   // as the app: by grid column
+    engine.stereoWidth = float(argc > 3 ? std::atof(argv[3]) : 0.5);
+    struct Hit { double t; int field; float force; };
+    // ding, then up the zigzag (left and right alternate), then a left-right pair and the ding
+    const std::vector<Hit> hits = {{0.0, 4, 0.7f}, {0.7, 7, 0.5f}, {1.1, 6, 0.5f}, {1.5, 8, 0.5f}, {1.9, 3, 0.55f},
+                                   {2.3, 5, 0.55f}, {2.7, 0, 0.6f}, {3.1, 2, 0.6f}, {3.5, 1, 0.6f},
+                                   {4.4, 3, 0.6f}, {4.4, 5, 0.6f}, {5.2, 4, 0.8f}};
+    const double seconds = 8.0;
+    std::vector<float> out, l(64), r(64);
+    size_t next = 0;
+    for (size_t n = 0; n < size_t(seconds * sr); n += 64) {
+        while (next < hits.size() && hits[next].t * sr <= n) {
+            const Hit& h = hits[next++];
+            float ms = 1.6f - 0.7f * (h.force - 0.1f) / 0.9f;
+            engine.push({morphion::Event::Down, int(next), h.field, 0.15f, 0.1f, h.force, ms, 0.12f});
+            engine.push({morphion::Event::Up, int(next), 0, 0, 0, 0, 0, 0});
+        }
+        engine.process(l.data(), r.data(), 64);
+        for (int i = 0; i < 64; ++i) { out.push_back(l[i]); out.push_back(r[i]); }
+    }
+    writeWav(argv[2], out, sr, 2);
+    std::printf("wrote %s (stereo, width %.2f)\n", argv[2], engine.stereoWidth.load());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--kurd") return kurd(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--attack") return attackDemo(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--slap") return slapDemo(argc, argv);
+    if (argc > 1 && std::string(argv[1]) == "--stereo") return stereoDemo(argc, argv);
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s out.wav [x y force contact_ms radius note_hz]\n", argv[0]);
         return 1;

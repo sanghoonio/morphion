@@ -282,6 +282,7 @@ void Engine::configure(double sampleRate, const std::vector<double>& fieldFreqs,
         guDetune(nominal, guNominalHz, guWeights, gu.couple);
     }
     fields_.assign(fieldFreqs.size(), Field{});
+    pan_.assign(fieldFreqs.size(), 0.0f);
     for (auto& l : levels_) l.store(0.0f, std::memory_order_relaxed);
     for (auto& l : modeLevels_) l.store(0.0f, std::memory_order_relaxed);
     for (size_t i = 0; i < tuned.size(); ++i) {
@@ -299,6 +300,7 @@ void Engine::configure(double sampleRate, const std::vector<double>& fieldFreqs,
     sr_ = sampleRate;
     engineSr_ = sampleRate;
     limDelay_.assign(std::max<size_t>(1, size_t(0.0015 * sampleRate)), 0.0f);
+    limDelayR_.assign(limDelay_.size(), 0.0f);
     limPos_ = 0;
     limGain_ = 1.0f;
     limAttack_ = 1.0f - std::exp(-5.0f / float(limDelay_.size()));   // ~99% of the way within the lookahead
@@ -345,6 +347,7 @@ void Engine::startAttack(int field, double level, double force, double contactMs
         if (!x.on) { v = &x; break; }
         if (x.age > v->age) v = &x;   // all busy: replace the oldest
     }
+    v->field = field;
     // Hertz-shortened contact, as in Field::strike: harder = shorter = brighter
     double tau = std::max(0.3, contactMs * std::pow(std::max(force, 0.05) / 0.7, -0.2)) * 1e-3;
     double f = std::clamp(force, 0.0, 1.0);
@@ -375,6 +378,10 @@ void Engine::startAttack(int field, double level, double force, double contactMs
         double contact = std::exp(-0.5 * (w * sd) * (w * sd));     // spectrum of the landing edge
         v->v[k] = a * level * 0.006 * f * rel * contact * w;      // impulse: displacement amplitude * w
     }
+}
+
+void Engine::setFieldPan(int field, float pan) {
+    if (field >= 0 && field < int(pan_.size())) pan_[field] = std::clamp(pan, -1.0f, 1.0f);
 }
 
 void Engine::slap(double force) {
@@ -436,7 +443,7 @@ void Engine::handle(const Event& e) {
         break;
     }
     case Event::Slap:
-        slap(std::clamp(double(e.force), 0.0, 1.0));
+        slap(std::clamp(double(e.force), 0.0, 2.0));   // 0.8 is a normal slap; the Slap setting scales it
         break;
     case Event::Move:
         for (auto& f : fingers_) {
@@ -483,6 +490,15 @@ void Engine::process(float* left, float* right, int frames) {
     }
     double scale = coupling.load(std::memory_order_relaxed);
     float g = gain.load(std::memory_order_relaxed);
+    // pan gains for this block: constant power, normalised so a centred field is unchanged
+    const double width = std::clamp(double(stereoWidth.load(std::memory_order_relaxed)), 0.0, 1.0);
+    const size_t nf = fields_.size();
+    double gainL[kMaxFields], gainR[kMaxFields];
+    for (size_t j = 0; j < nf && j < size_t(kMaxFields); ++j) {
+        double th = (pan_[j] * width + 1.0) * M_PI / 4.0;
+        gainL[j] = std::sqrt(2.0) * std::cos(th);
+        gainR[j] = std::sqrt(2.0) * std::sin(th);
+    }
     for (int i = 0; i < frames; ++i) {
         // link forces from the current state of every field, before any field steps
         for (const auto& l : links_) {
@@ -506,7 +522,7 @@ void Engine::process(float* left, float* right, int frames) {
                 fh += guCouple_[j] * fd.q(0);
             }
         }
-        double s = 0.0;
+        double s = 0.0, panL = 0.0, panR = 0.0;   // centred, and panned left and right
         if (guOsc_) {
             double q = guProp_[0] * guQ_ + guProp_[1] * guV_;
             double v = guProp_[2] * guQ_ + guProp_[3] * guV_ + fh / sr_;
@@ -549,7 +565,9 @@ void Engine::process(float* left, float* right, int frames) {
                 v.v[k] = vel;
                 sum += vel / v.w[k];
             }
-            s += sum;
+            int fj = v.field < int(kMaxFields) ? v.field : 0;
+            panL += sum * gainL[fj];
+            panR += sum * gainR[fj];
             if (v.age > int(1.0 * sr_)) v.on = false;    // the slowest mode is ~60 dB down by 1 s
         }
         if (noiseLeft_ > 0) {
@@ -562,22 +580,30 @@ void Engine::process(float* left, float* right, int frames) {
             noiseEnv_ *= noiseDecay_;
             --noiseLeft_;
         }
-        for (auto& f : fields_) s += f.tick();
-        float y = static_cast<float>(s) * g;
-        if (limiter) {
+        for (size_t j = 0; j < nf; ++j) {
+            double v = fields_[j].tick();
+            if (j < size_t(kMaxFields)) { panL += v * gainL[j]; panR += v * gainR[j]; }
+        }
+        float yl = static_cast<float>(s + panL) * g, yr = static_cast<float>(s + panR) * g;   // s: the centred parts
+        if (limiter) {   // linked: one gain from the louder channel, so loud hits don't shift the image
             constexpr float ceiling = 0.95f;
             const size_t L = limDelay_.size();
-            limDelay_[limPos_] = y;
+            limDelay_[limPos_] = yl;
+            limDelayR_[limPos_] = yr;
             limPos_ = (limPos_ + 1) % L;
             float peak = 0.0f;                       // loudest sample in the lookahead window
-            for (float v : limDelay_) peak = std::max(peak, std::fabs(v));
+            for (size_t k = 0; k < L; ++k) peak = std::max(peak, std::max(std::fabs(limDelay_[k]), std::fabs(limDelayR_[k])));
             float target = peak > ceiling ? ceiling / peak : 1.0f;
             limGain_ += (target - limGain_) * (target < limGain_ ? limAttack_ : limRelease_);
-            y = limDelay_[limPos_] * limGain_;       // the oldest sample, now level-matched
-            y = std::clamp(y, -1.0f, 1.0f);          // safety net; rarely touched
+            yl = std::clamp(limDelay_[limPos_] * limGain_, -1.0f, 1.0f);   // the oldest samples, level-matched;
+            yr = std::clamp(limDelayR_[limPos_] * limGain_, -1.0f, 1.0f);  // the clamp is a rarely touched safety net
         }
-        left[i] = y;
-        if (right) right[i] = y;
+        if (right) {
+            left[i] = yl;
+            right[i] = yr;
+        } else {
+            left[i] = 0.5f * (yl + yr);   // one buffer: a mono mix (identical to either channel at width 0)
+        }
     }
     for (size_t i = 0; i < fields_.size() && i < size_t(kMaxFields); ++i) {
         double e = 0.0;

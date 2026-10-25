@@ -179,6 +179,11 @@ public:
     bool limiter = true;
     std::atomic<float> coupling{1.0f};   // scales every link; settable from any thread
     std::atomic<float> attackLevel{1.0f};    // scales the strike click and shimmer (force-weighted), 0 = off
+    // Stereo: each field (and its strikes' attack) is panned to pan[field] * stereoWidth, -1 left
+    // to +1 right, constant power normalised so a centred field is unchanged in both channels.
+    // The Gu cavity and the slap's shell knock and noise stay centred. 0 = mono.
+    std::atomic<float> stereoWidth{0.0f};
+    void setFieldPan(int field, float pan);   // after configure, before audio starts
     std::atomic<float> radiationTilt{0.0f};   // live override of FieldParams::radiationTilt
     int fieldCount() const { return static_cast<int>(fields_.size()); }
     double fieldFreq(int i) const { return heard_[i]; }   // pitch heard, after link retuning
@@ -208,7 +213,8 @@ private:
     std::vector<Link> links_;
     std::vector<double> heard_;
     float appliedTilt_ = 0.0f;
-    std::vector<float> limDelay_;    // lookahead line
+    std::vector<float> limDelay_, limDelayR_;    // lookahead lines, left and right
+    std::vector<float> pan_;                     // per field, -1..1 at full width
     size_t limPos_ = 0;
     float limGain_ = 1.0f, limAttack_ = 0.0f, limRelease_ = 0.0f;
     double engineSr_ = 48000.0;
@@ -224,6 +230,7 @@ private:
     struct Attack {
         bool on = false;
         int age = 0;
+        int field = 0;           // panned with its field
         double click = 0, clickDecay = 0, lpA = 0, hp = 0, lp = 0, prev = 0;
         std::array<std::array<double, 4>, kAttackModes> prop{};
         std::array<double, kAttackModes> q{}, v{}, w{};

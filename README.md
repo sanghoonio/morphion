@@ -33,6 +33,8 @@ open mac/build/morphion.app
   - hit strength and resting mute
   - sympathetic swell and low/high balance
   - Gu cavity
+  - stereo width
+  - strike click and slap loudness
 
   Settings are saved between launches.
 
@@ -42,6 +44,7 @@ open mac/build/morphion.app
 - Notes that sit on another note's 2nd or 3rd harmonic are coupled to it and tuned slightly below that harmonic, so they swell in sympathy a beat after the lower note is struck.
 - The Gu, the hole in the bottom shell, is modelled as an air resonance under the ding. The notes are pre-tuned so they land on pitch with it coupled in.
 - A strike is a short force pulse whose length depends on how hard you hit. While the finger touches, it damps the note.
+- Notes are placed left to right by their column on the grid, the ding in the middle. Notes swelling in sympathy sound from their own side.
 - The output goes through a lookahead peak limiter that turns the level down rather than distorting it.
 
 The numbers come from published handpan measurements where they exist (see `docs/handpan-acoustics.md`), and were tuned by ear against recordings where they don't.

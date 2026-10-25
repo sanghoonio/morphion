@@ -27,6 +27,7 @@
 #include <dlfcn.h>
 
 #include <algorithm>
+#include <cstdarg>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -69,6 +70,7 @@ static void (*MTRegisterContactFrameCallback)(MTDeviceRef, MTFrameCallback);
 static void (*MTUnregisterContactFrameCallback)(MTDeviceRef, MTFrameCallback);
 static int (*MTDeviceStart)(MTDeviceRef, int);
 static int (*MTDeviceStop)(MTDeviceRef);
+static CFArrayRef (*MTDeviceCreateList)(void);   // optional: only used to log how many devices there are
 
 static bool loadMultitouch() {
     void* h = dlopen("/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport", RTLD_NOW);
@@ -78,6 +80,7 @@ static bool loadMultitouch() {
     MTUnregisterContactFrameCallback = (void (*)(MTDeviceRef, MTFrameCallback))dlsym(h, "MTUnregisterContactFrameCallback");
     MTDeviceStart = (int (*)(MTDeviceRef, int))dlsym(h, "MTDeviceStart");
     MTDeviceStop = (int (*)(MTDeviceRef))dlsym(h, "MTDeviceStop");
+    MTDeviceCreateList = (CFArrayRef(*)(void))dlsym(h, "MTDeviceCreateList");
     if (!MTDeviceCreateDefault || !MTRegisterContactFrameCallback || !MTDeviceStart || !MTDeviceStop) {
         std::fprintf(stderr, "MultitouchSupport symbols missing\n");
         return false;
@@ -117,6 +120,9 @@ struct Settings {
     float tilt = -0.1f;      // loudness balance: negative favours low notes
     float gu = 0.2f;         // Gu cavity coupling, 0 = off
     float sustain = 1.0f;    // multiplies every decay time (1 = the measured handpan values)
+    float stereo = 0.5f;     // stereo width: side columns panned to +-this (0 = mono)
+    float attack = 1.0f;     // strike click and shimmer level (0 = off)
+    float slap = 1.0f;       // slap loudness (0 = off)
 };
 static Settings g_set;
 
@@ -208,6 +214,9 @@ static void loadSettings() {
     g_set.tilt = [d floatForKey:@"tilt"];
     g_set.gu = [d floatForKey:@"gu"];
     g_set.sustain = [d objectForKey:@"sustain"] ? [d floatForKey:@"sustain"] : 1.0f;
+    if ([d objectForKey:@"stereo"]) g_set.stereo = [d floatForKey:@"stereo"];
+    if ([d objectForKey:@"attack"]) g_set.attack = [d floatForKey:@"attack"];
+    if ([d objectForKey:@"slap"]) g_set.slap = [d floatForKey:@"slap"];
 }
 
 static void saveSettings() {
@@ -222,6 +231,9 @@ static void saveSettings() {
     [d setFloat:g_set.tilt forKey:@"tilt"];
     [d setFloat:g_set.gu forKey:@"gu"];
     [d setFloat:g_set.sustain forKey:@"sustain"];
+    [d setFloat:g_set.stereo forKey:@"stereo"];
+    [d setFloat:g_set.attack forKey:@"attack"];
+    [d setFloat:g_set.slap forKey:@"slap"];
 }
 
 static int fieldAt(float nx, float ny) {
@@ -263,7 +275,8 @@ static bool g_roundPreview = false;         // --snapshot sets g_round directly 
 static double g_clock = -1.0;               // --frames runs on its own clock
 static int g_waves = 4;                     // ripple waves round a note for the fundamental (x2, x3 for octave, twelfth)
 static double g_wobbleDiv = 40.0;           // ripple speed: the ding's fundamental swings at 146.83 Hz / this
-static double g_wobbleExp = 1.0 / 3.0;      // how ripple speed follows pitch: 1 proportional, 0.5 sqrt, 0 the same for all
+static double g_wobbleExp = 0.0;            // how ripple speed follows pitch: 1 proportional, 0.5 sqrt, 0 the same for all
+static double g_rippleSizeExp = 0.0;        // how ripple size falls with pitch: 0.5 sqrt, 0 the same for all
 static double nowSec() { return g_clock >= 0.0 ? g_clock : CFAbsoluteTimeGetCurrent(); }
 
 // ---------------------------------------------------------------- touch handling (MT thread)
@@ -286,7 +299,22 @@ static float contactRadius(const MTTouch& t) {
     return std::clamp(0.15f * t.majorAxis / g_cfg.majorRef * scale, 0.05f, 0.8f);
 }
 
+// Timestamped lines on stderr for sleep/wake, audio device and trackpad events: run
+// mac/build/morphion from Terminal to see them (the robustness tests in plans/).
+static void logEvent(const char* fmt, ...) {
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    NSString* t = [NSDateFormatter localizedStringFromDate:[NSDate date] dateStyle:NSDateFormatterNoStyle
+                                                timeStyle:NSDateFormatterMediumStyle];
+    std::fprintf(stderr, "[%s] %s\n", t.UTF8String, buf);
+}
+static std::atomic<bool> g_logNextFrame{true};   // log the first touch frame at start and after each wake
+
 static int touchCallback(MTDeviceRef, const MTTouch* touches, int n, double, int) {
+    if (g_logNextFrame.exchange(false)) logEvent("touch frames arriving (%d contacts)", n);
     bool live = g_captured.load();
     for (auto& t : g_tracks) t.seen = false;
 
@@ -403,6 +431,8 @@ static void applyLiveSettings() {
     g_engine.restFloor = g_cfg.muteFloor;
     g_engine.coupling = g_set.coupling;
     g_engine.radiationTilt = g_set.tilt;
+    g_engine.stereoWidth = g_set.stereo;
+    g_engine.attackLevel = g_set.attack;
     g_sizeHard = g_set.sizeHard;
 }
 
@@ -418,6 +448,8 @@ static void configureEngine() {
     morphion::FieldParams fp;
     fp.decayScale = g_set.sustain;
     g_engine.configure(g_sr, freqs, fp, cp, gp);
+    // stereo placement by grid column: left column left, middle centred, right column right
+    for (int i = 0; i < g_layout.count; ++i) g_engine.setFieldPan(i, g_set.single ? 0.0f : float(i % 3 - 1));
     applyLiveSettings();
     for (const auto& l : g_engine.links()) {
         double f = g_engine.fieldFreq(l.dst);
@@ -527,7 +559,7 @@ static void startRects(NSRect bounds, NSRect* play, NSRect* gear) {
 // Controls are laid out while drawing and hit-tested on click, so drawing and input
 // always agree. Choice rows are pills (selected = amber); sliders are a line and a knob.
 enum CtlId { kCtlScale, kCtlKey, kCtlLayout, kCtlGain, kCtlSustain, kCtlSizeHard, kCtlMute, kCtlSwell, kCtlTilt, kCtlGu,
-             kCtlReset, kCtlDone };
+             kCtlStereo, kCtlAttack, kCtlSlap, kCtlReset, kCtlDone };
 struct Ctl {
     CtlId id;
     int choice = -1;        // for choice pills
@@ -543,6 +575,9 @@ static const SliderDef kSliders[] = {
     {kCtlSwell, "Sympathetic swell", 0.0, 3.0, &Settings::coupling, "%.2f"},
     {kCtlTilt, "Low / high balance", -0.5, 0.5, &Settings::tilt, "%+.2f"},
     {kCtlGu, "Gu cavity", 0.0, 0.4, &Settings::gu, "%.2f"},
+    {kCtlStereo, "Stereo width", 0.0, 1.0, &Settings::stereo, "%.2f"},
+    {kCtlAttack, "Strike click", 0.0, 2.0, &Settings::attack, "%.2f"},
+    {kCtlSlap, "Slap", 0.0, 2.0, &Settings::slap, "%.2f"},
 };
 static const char* sliderHint(CtlId id) {
     switch (id) {
@@ -552,6 +587,9 @@ static const char* sliderHint(CtlId id) {
     case kCtlSwell: return "how strongly notes ring in sympathy";
     case kCtlTilt: return "negative favours the low notes";
     case kCtlGu: return "the air resonance under the ding";
+    case kCtlStereo: return "how far the side notes sit left and right";
+    case kCtlAttack: return "the finger-on-metal click of a strike";
+    case kCtlSlap: return "how loud Space slaps the shell";
     default: return "";
     }
 }
@@ -559,9 +597,11 @@ static const char* sliderHint(CtlId id) {
 static std::vector<Ctl> g_ctls;
 static int g_dragSlider = -1;
 
+// Centred in the whole window. Its top padding is empty, so at small window heights it can
+// run a little under the title bar (clear of the traffic lights, which sit left of it).
 static NSRect paneRect(NSRect b) {
-    CGFloat w = std::min<CGFloat>(700, b.size.width - 40), h = std::min<CGFloat>(520, b.size.height - kTitlebar - 24);
-    return NSMakeRect(std::round(NSMidX(b) - w / 2), std::round((b.size.height - kTitlebar) / 2 - h / 2), w, h);
+    CGFloat w = std::min<CGFloat>(700, b.size.width - 40), h = std::min<CGFloat>(540, b.size.height - 80);
+    return NSMakeRect(std::round(NSMidX(b) - w / 2), std::round(NSMidY(b) - h / 2), w, h);
 }
 
 static void drawText(NSString* t, NSPoint p, CGFloat size, NSColor* c, NSFontWeight weight = NSFontWeightRegular) {
@@ -644,7 +684,7 @@ static void drawPane(NSRect b) {
 
     // sliders in two columns: label and value on top, track, hint underneath
     const int n = int(sizeof(kSliders) / sizeof(kSliders[0]));
-    const CGFloat colGap = 36, colW = (right - left - colGap) / 2, cellH = 62;
+    const CGFloat colGap = 36, colW = (right - left - colGap) / 2, cellH = 60;
     for (int i = 0; i < n; ++i) {
         const SliderDef& sd = kSliders[i];
         CGFloat cx = left + (i % 2) * (colW + colGap), cy = y - (i / 2) * cellH;
@@ -788,7 +828,7 @@ static void drawPane(NSRect b) {
     }
     if (e.keyCode == 49 && g_captured.load()) {   // Space: slap the shell (keys have no velocity: fixed force)
         if (!e.isARepeat) {
-            g_engine.push({morphion::Event::Slap, 0, 0, 0, 0, 0.8f, 0, 0});
+            g_engine.push({morphion::Event::Slap, 0, 0, 0, 0, 0.8f * g_set.slap, 0, 0});
             g_slapTime = CFAbsoluteTimeGetCurrent();
         }
         return;
@@ -925,21 +965,20 @@ static double wobbleFor(float level, double maxPts) {
                 double target = live ? roundnessFor(g_engine.fieldLevel(field)) : 0.0;
                 g_round[field] += float((target - g_round[field]) * (target > g_round[field] ? 0.6 : 0.2));
             }
-            // ripple: each mode swings at a slowed copy of its frequency, keeping the 1:2:3 of
-            // fundamental, octave and twelfth. Across notes the speed follows pitch^g_wobbleExp
-            // (cube root: ding fundamental at 146.83 / g_wobbleDiv = 3.7 Hz, F4 at 4.9), so higher
-            // notes shimmer faster without blurring: the eye stops seeing small motion near 15-20 Hz.
-            // Capped at 15 Hz, four frames a cycle. Each note starts at its own phase.
-            // Size goes as sqrt(D4 / pitch): steel at equal loudness moves further on lower notes
-            // (as 1 / pitch); the square root keeps high notes visible (ding 1.41x, F4 0.92x).
+            // ripple: the fundamental, octave and twelfth swing at 1:2:3 of a base speed of
+            // 146.83 / g_wobbleDiv = 3.7 Hz, scaled across notes by (pitch / 146.83)^g_wobbleExp
+            // (0: the same on every note). Capped at 15 Hz, four frames a cycle: the eye stops
+            // seeing small motion near 15-20 Hz. Each note starts at its own phase.
+            // Size goes as (D4 / pitch)^g_rippleSizeExp: steel at equal loudness moves further on
+            // lower notes (as 1 / pitch); 0.5 gives ding 1.41x, F4 0.92x; 0 the same on every note.
             double d0 = 0, d1 = 0, d2 = 0;
             if (live && field < g_engine.fieldCount()) {
                 double hz = g_engine.fieldFreq(field), f1 = 146.83 * std::pow(hz / 146.83, g_wobbleExp) / g_wobbleDiv, off = field * 1.7;
-                double size = std::sqrt(293.66 / hz);
+                double size = std::pow(293.66 / hz, g_rippleSizeExp);
                 auto swing = [&](int n) { return std::sin(2 * M_PI * std::min(n * f1, 15.0) * now + n * off); };
-                d0 = wobbleFor(g_engine.modeLevel(field, 0), 1.5 * size) * swing(1);
-                d1 = wobbleFor(g_engine.modeLevel(field, 1), 2.5 * size) * swing(2);
-                d2 = wobbleFor(g_engine.modeLevel(field, 2), 2.0 * size) * swing(3);
+                d0 = wobbleFor(g_engine.modeLevel(field, 0), 2.1 * size) * swing(1);
+                d1 = wobbleFor(g_engine.modeLevel(field, 1), 3.5 * size) * swing(2);
+                d2 = wobbleFor(g_engine.modeLevel(field, 2), 2.8 * size) * swing(3);
             }
             NSBezierPath* note = morphedNote(fr, rad, g_round[field], d0, d1, d2);
             if (glow > 0.003) {
@@ -1058,7 +1097,7 @@ static double wobbleFor(float level, double maxPts) {
     if (NSImage* icon = [[NSImage alloc] initWithContentsOfFile:icns]) NSApp.applicationIconImage = icon;
 
     self.window.releasedWhenClosed = NO;
-    self.window.contentMinSize = NSMakeSize(760, 610);   // room for the settings pane   // ARC owns it; AppKit releasing it on close crashed quit
+    self.window.contentMinSize = NSMakeSize(760, 620);   // room for the settings pane   // ARC owns it; AppKit releasing it on close crashed quit
     // one surface: the content runs under a transparent title bar, dark to match
     self.window.styleMask |= NSWindowStyleMaskFullSizeContentView;
     self.window.titlebarAppearsTransparent = YES;
@@ -1075,6 +1114,29 @@ static double wobbleFor(float level, double maxPts) {
     [self.window makeFirstResponder:view];
     [NSApp activateIgnoringOtherApps:YES];
     [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0 repeats:YES block:^(NSTimer*) { [view setNeedsDisplay:YES]; }];
+
+    // log sleep, wake and output-device changes, for the robustness tests
+    NSNotificationCenter* wc = NSWorkspace.sharedWorkspace.notificationCenter;
+    [wc addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil
+                usingBlock:^(NSNotification*) { logEvent("sleeping"); }];
+    [wc addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil usingBlock:^(NSNotification*) {
+        logEvent("woke; touch the trackpad to check frames still arrive");
+        g_logNextFrame = true;
+    }];
+    AudioObjectPropertyAddress def = {kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal,
+                                      kAudioObjectPropertyElementMain};
+    AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &def, dispatch_get_main_queue(),
+                                        ^(UInt32, const AudioObjectPropertyAddress*) {
+        AudioObjectID dev = 0;
+        UInt32 size = sizeof dev;
+        AudioObjectGetPropertyData(kAudioObjectSystemObject, &def, 0, nullptr, &size, &dev);
+        Float64 rate = 0;
+        AudioObjectPropertyAddress ra = {kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal,
+                                         kAudioObjectPropertyElementMain};
+        size = sizeof rate;
+        AudioObjectGetPropertyData(dev, &ra, 0, nullptr, &size, &rate);
+        logEvent("default output device changed (device %u, %.0f Hz; engine runs at %.0f Hz)", dev, rate, g_sr);
+    });
 }
 - (void)applicationDidResignActive:(NSNotification*)n { setCaptured(false, self.window); }
 - (void)applicationWillTerminate:(NSNotification*)n {
@@ -1091,7 +1153,8 @@ static void usage() {
                  "usage: morphion [--layout grid|single] [--probe] [--mute X] [--mute-floor X] [--size-soft X] [--size-hard X]\n"
                  "                [--force-curve X] [--soft-ms X] [--hard-ms X] [--major-ref X]\n"
                  "                [--gain X] [--buffer N] [--coupling X] [--gap HZ] [--gap-2x HZ]\n"
-                 "                [--tilt X] [--gu X] [--gu-hz HZ] [--snapshot DIR] [--frames DIR] [--waves N] [--wobble-div X] [--wobble-exp X]\n");
+                 "                [--tilt X] [--gu X] [--gu-hz HZ] [--snapshot DIR] [--frames DIR] [--waves N] [--wobble-div X] [--wobble-exp X]\n"
+                 "                [--ripple-size-exp X]\n");
 }
 
 // Draw the canvas offscreen to <dir>/idle.png and <dir>/playing.png and exit (no audio,
@@ -1218,6 +1281,7 @@ int main(int argc, char** argv) {
         else if (a == "--waves") g_waves = std::max(1, std::atoi(next()));
         else if (a == "--wobble-div") g_wobbleDiv = std::max(1.0, std::atof(next()));
         else if (a == "--wobble-exp") g_wobbleExp = std::atof(next());
+        else if (a == "--ripple-size-exp") g_rippleSizeExp = std::atof(next());
         else if (a == "--frames") { const char* dir = next(); return frames(dir); }
         else { usage(); return 1; }
     }
@@ -1237,6 +1301,11 @@ int main(int argc, char** argv) {
     } else {
         MTRegisterContactFrameCallback(g_mtDev, touchCallback);
         MTDeviceStart(g_mtDev, 0);
+        long devices = -1;
+        if (MTDeviceCreateList) {
+            if (CFArrayRef list = MTDeviceCreateList()) { devices = CFArrayGetCount(list); CFRelease(list); }
+        }
+        logEvent("started: %ld multitouch device(s), playing the default one; audio at %.0f Hz", devices, g_sr);
     }
 
     @autoreleasepool {
