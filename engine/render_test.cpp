@@ -4,7 +4,7 @@
 //   make -C engine && engine/build/render_test out.wav [x y force contact_ms radius note_hz]
 //   engine/build/render_test --kurd out.wav [field seconds]
 //   engine/build/render_test --slap out.wav [alone|phrase]
-//   engine/build/render_test --attack out.wav LEVEL [ding|phrase|sweep]
+//   engine/build/render_test --attack out.wav LEVEL [ding|phrase|sweep] [seconds]
 //
 // The first form renders one Field (compare with one_field.py). --kurd renders
 // one strike on the D Kurd 9 layout through the Engine with cross-field links
@@ -109,7 +109,7 @@ static int slapDemo(int argc, char** argv) {
 
 // Strikes with the attack (click + shimmer) at LEVEL (1 = default), app levels, limiter on.
 static int attackDemo(int argc, char** argv) {
-    if (argc < 4) { std::fprintf(stderr, "usage: %s --attack out.wav LEVEL [ding|phrase]\n", argv[0]); return 1; }
+    if (argc < 4) { std::fprintf(stderr, "usage: %s --attack out.wav LEVEL [ding|phrase|sweep] [seconds]\n", argv[0]); return 1; }
     float level = float(std::atof(argv[3]));
     std::string mode = argc > 4 ? argv[4] : "ding";
     bool phrase = mode == "phrase", sweep = mode == "sweep";
@@ -129,7 +129,7 @@ static int attackDemo(int argc, char** argv) {
         for (float f : {0.15f, 0.3f, 0.5f, 0.7f, 0.85f, 1.0f}) hits.push_back({double(hits.size()), 3, f, ms(f)});
     else
         hits = {{0.02, 4, 0.7f, 1.5f}};
-    double seconds = phrase ? 5.5 : sweep ? 6.5 : 1.5;
+    double seconds = argc > 5 ? std::atof(argv[5]) : phrase ? 5.5 : sweep ? 6.5 : 1.5;
     std::vector<float> out(size_t(seconds * sr)), buf(64);
     size_t next = 0;
     for (size_t n = 0; n < out.size(); n += 64) {

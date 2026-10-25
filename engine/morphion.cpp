@@ -182,6 +182,17 @@ double Field::tick() {
     return acc * outScale_;
 }
 
+double Field::modeLevel(int n) const {
+    if (asleep_) return 0.0;
+    return std::fabs(out_[n] * outScale_) * std::sqrt(v_[n] * v_[n] + omega_[n] * omega_[n] * q_[n] * q_[n]);
+}
+
+double Field::level() const {
+    double e = 0.0;
+    for (int n = 0; n < kModes; ++n) e += modeLevel(n) * modeLevel(n);
+    return std::sqrt(e);
+}
+
 // ---------------------------------------------------------------- Engine
 
 void findLinks(const std::vector<double>& freqs, const CouplingParams& c,
@@ -271,6 +282,8 @@ void Engine::configure(double sampleRate, const std::vector<double>& fieldFreqs,
         guDetune(nominal, guNominalHz, guWeights, gu.couple);
     }
     fields_.assign(fieldFreqs.size(), Field{});
+    for (auto& l : levels_) l.store(0.0f, std::memory_order_relaxed);
+    for (auto& l : modeLevels_) l.store(0.0f, std::memory_order_relaxed);
     for (size_t i = 0; i < tuned.size(); ++i) {
         FieldParams p = base;
         p.f0 = nominal[i];
@@ -565,6 +578,15 @@ void Engine::process(float* left, float* right, int frames) {
         }
         left[i] = y;
         if (right) right[i] = y;
+    }
+    for (size_t i = 0; i < fields_.size() && i < size_t(kMaxFields); ++i) {
+        double e = 0.0;
+        for (int n = 0; n < kModes; ++n) {
+            double a = fields_[i].modeLevel(n);
+            modeLevels_[i * kModes + n].store(float(a), std::memory_order_relaxed);
+            e += a * a;
+        }
+        levels_[i].store(float(std::sqrt(e)), std::memory_order_relaxed);
     }
 }
 

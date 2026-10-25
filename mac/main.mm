@@ -7,6 +7,7 @@
 //            [--coupling 1.0] [--gap 2.4] [--gap-2x 0.45] [--tilt -0.1]
 //            [--gu 0.2] [--gu-hz 80]
 //   mac/build/morphion --snapshot DIR   # draw the canvas to DIR/idle.png and playing.png, exit
+//   mac/build/morphion --frames DIR     # run the engine offline, draw 60 fps frames of a few strikes to DIR
 //
 // Play (or Return) starts playing: the cursor is frozen and hidden so taps land here.
 // Esc stops, Space slaps the shell, the gear opens settings. Touches only sound while playing.
@@ -241,6 +242,12 @@ static std::vector<UiTouch> g_uiTouches;
 static std::array<std::atomic<double>, 9> g_flashTime;
 static std::atomic<double> g_slapTime{0.0};   // for a brief flash of the whole pan
 static std::array<std::atomic<float>, 9> g_flashForce;
+static std::array<float, 9> g_round{};      // how far each note's outline has rounded (0..1), smoothed
+static bool g_roundPreview = false;         // --snapshot sets g_round directly (no audio)
+static double g_clock = -1.0;               // --frames runs on its own clock
+static int g_waves = 4;                     // ripple waves round a note for the fundamental (x2, x3 for octave, twelfth)
+static double g_wobbleDiv = 40.0;           // ripple speed = mode frequency / this
+static double nowSec() { return g_clock >= 0.0 ? g_clock : CFAbsoluteTimeGetCurrent(); }
 
 // ---------------------------------------------------------------- touch handling (MT thread)
 
@@ -272,6 +279,7 @@ static int touchCallback(MTDeviceRef, const MTTouch* touches, int n, double, int
         if (!tr) continue;
         tr->seen = true;
         bool contact = (t.state == 3 || t.state == 4);
+        if (!contact) continue;   // hovering fingers aren't drawn
         float nx = t.normalized.pos.x, ny = t.normalized.pos.y;
 
         if (g_cfg.probe && (t.state != tr->state || tr->frames < 4)) {
@@ -769,9 +777,76 @@ static void drawPane(NSRect b) {
     [super keyDown:e];
 }
 
+// A note's outline while it rings. The corners grow from the resting radius into the
+// half-width and half-height (at m = 1 the note is the ellipse inscribed in it), and the
+// outline ripples: standing waves running round the edge, one per main mode, with g_waves,
+// twice and three times as many waves round the note for the fundamental, octave and
+// twelfth (the 1:2:3 of their pitches). d0, d1, d2 are each wave's current displacement in points, along the normal.
+static NSBezierPath* morphedNote(NSRect fr, CGFloat rad, double m, double d0 = 0, double d1 = 0, double d2 = 0) {
+    const double a = fr.size.width / 2, b = fr.size.height / 2, cx = NSMidX(fr), cy = NSMidY(fr);
+    const double rx = rad + (a - rad) * m, ry = rad + (b - rad) * m;
+    if (std::fabs(d0) + std::fabs(d1) + std::fabs(d2) < 0.05)
+        return [NSBezierPath bezierPathWithRoundedRect:fr xRadius:rx yRadius:ry];
+    // walk the outline anticlockwise from the right edge, a straight run then a quarter
+    // ellipse for each side, points about 1.5 pt apart, noting the distance travelled
+    struct P { double x, y, nx, ny, s; };
+    std::vector<P> pts;
+    double s = 0;
+    auto put = [&](double x, double y, double nx, double ny) {
+        if (!pts.empty()) s += std::hypot(x - pts.back().x, y - pts.back().y);
+        pts.push_back({x, y, nx, ny, s});
+    };
+    const double sx[4] = {1, -1, -1, 1}, sy[4] = {1, 1, -1, -1};   // corner quadrants, anticlockwise from top right
+    for (int q = 0; q < 4; ++q) {
+        double ox = cx + sx[q] * (a - rx), oy = cy + sy[q] * (b - ry);   // corner ellipse centre
+        bool vertical = q % 2 == 0;   // the straight side leading into this corner
+        double len = vertical ? 2 * (b - ry) : 2 * (a - rx);
+        int n = std::max(1, int(len / 1.5));
+        for (int i = 0; i < n; ++i) {
+            double t = double(i) / n;
+            if (vertical) put(cx + sx[q] * a, oy - sy[q] * len * (1 - t), sx[q], 0);
+            else put(ox - sx[q] * len * (1 - t), cy + sy[q] * b, 0, sy[q]);
+        }
+        int k = std::max(16, int((rx + ry) * 1.2));
+        for (int i = 0; i < k; ++i) {
+            double th = q * M_PI / 2 + M_PI / 2 * i / k, c = std::cos(th), sn = std::sin(th);
+            double nx = c / rx, ny = sn / ry, nl = std::hypot(nx, ny);
+            put(ox + rx * c, oy + ry * sn, nx / nl, ny / nl);
+        }
+    }
+    const double perimeter = s + std::hypot(pts.front().x - pts.back().x, pts.front().y - pts.back().y);
+    NSBezierPath* p = [NSBezierPath bezierPath];
+    for (size_t i = 0; i < pts.size(); ++i) {
+        double u = 2 * M_PI * pts[i].s / perimeter;   // whole numbers of waves, so the ripple closes
+        const int w = g_waves;
+        double d = d0 * std::sin(w * u) + d1 * std::sin(2 * w * u) + d2 * std::sin(3 * w * u);
+        NSPoint pt = NSMakePoint(pts[i].x + pts[i].nx * d, pts[i].y + pts[i].ny * d);
+        if (i == 0) [p moveToPoint:pt]; else [p lineToPoint:pt];
+    }
+    [p closePath];
+    p.lineJoinStyle = NSLineJoinStyleRound;
+    return p;
+}
+
+// Target roundness from how loudly the note rings: -50 dB square, 0 dB (the hardest hit)
+// the roundest. A gentle term carries light and medium hits, a steep one lifts firm and
+// hard hits; fitted so light, medium and firm ding strikes peak near 0.19, 0.32 and 0.52.
+static double roundnessFor(float level) {
+    double db = 20.0 * std::log10(level + 1e-9);
+    double x = std::clamp((db + 50.0) / 50.0, 0.0, 1.0);
+    return 0.85 * (0.44 * std::pow(x, 1.6) + 0.56 * std::pow(x, 12.0));
+}
+
+// Wobble size in points for one mode's level, on the same dB scale.
+static double wobbleFor(float level, double maxPts) {
+    double db = 20.0 * std::log10(level + 1e-9);
+    return maxPts * std::pow(std::clamp((db + 50.0) / 46.0, 0.0, 1.0), 1.5);
+}
+
 // The canvas: clean outlines, no gradients. Each note is a rounded-rectangle outline
 // inside its grid cell (its hit area is the full cell). A strike fills that note in
-// solid amber, stronger for harder hits, fading out; touches are filled ellipses.
+// solid amber, stronger for harder hits, fading out; touches are outlined ellipses.
+// While a note rings (struck or in sympathy) its outline rounds towards an ellipse.
 - (void)drawRect:(NSRect)dirty {
     NSRect b = self.bounds;
     NSRect pad = padRect(b);
@@ -792,7 +867,7 @@ static void drawPane(NSRect b) {
            withAttributes:small];
     }
 
-    double now = CFAbsoluteTimeGetCurrent();
+    double now = nowSec();
     CGFloat cw = pad.size.width / cells, ch = pad.size.height / cells;
     CGFloat inset = std::min(cw, ch) * 0.07;
     CGFloat fontSize = std::clamp(std::min(cw, ch) * 0.11, 13.0, 26.0);
@@ -807,7 +882,23 @@ static void drawPane(NSRect b) {
             double slapAge = now - g_slapTime.load();
             if (slapAge < 0.6) glow = std::max(glow, 0.25 * std::exp(-slapAge * 8.0));   // a slap lights the whole pan briefly
 
-            NSBezierPath* note = [NSBezierPath bezierPathWithRoundedRect:fr xRadius:rad yRadius:rad];
+            if (!g_roundPreview) {   // rise within a frame or two, settle a little slower
+                double target = live ? roundnessFor(g_engine.fieldLevel(field)) : 0.0;
+                g_round[field] += float((target - g_round[field]) * (target > g_round[field] ? 0.6 : 0.2));
+            }
+            // ripple: each mode swings at its real frequency slowed by g_wobbleDiv (the ding's
+            // fundamental at ~3.7 Hz, F4's at ~8.7), so higher notes shimmer faster and the 1:2:3
+            // of fundamental, octave and twelfth holds. Capped at 20 Hz, three frames a cycle at
+            // 60 fps; faster would alias into a slow crawl. Each note starts at its own phase.
+            double d0 = 0, d1 = 0, d2 = 0;
+            if (live && field < g_engine.fieldCount()) {
+                double f1 = g_engine.fieldFreq(field) / g_wobbleDiv, off = field * 1.7;
+                auto swing = [&](int n) { return std::sin(2 * M_PI * std::min(n * f1, 20.0) * now + n * off); };
+                d0 = wobbleFor(g_engine.modeLevel(field, 0), 1.5) * swing(1);
+                d1 = wobbleFor(g_engine.modeLevel(field, 1), 2.5) * swing(2);
+                d2 = wobbleFor(g_engine.modeLevel(field, 2), 2.0) * swing(3);
+            }
+            NSBezierPath* note = morphedNote(fr, rad, g_round[field], d0, d1, d2);
             if (glow > 0.003) {
                 [rgb(1.0, 0.72, 0.32, 0.55 * glow) setFill];
                 [note fill];
@@ -867,7 +958,7 @@ static void drawPane(NSRect b) {
 
     if (self.settingsOpen) drawPane(b);
 
-    // live touches: filled ellipses, amber while in contact; only while playing
+    // live touches in contact: amber outlines; only while playing
     std::vector<UiTouch> touches;
     if (live) {
         std::lock_guard<std::mutex> lock(g_uiMutex);
@@ -877,13 +968,16 @@ static void drawPane(NSRect b) {
         CGFloat x = pad.origin.x + t.nx * pad.size.width, y = pad.origin.y + t.ny * pad.size.height;
         CGFloat rx = std::max(4.0f, t.major * 2.0f), ry = std::max(4.0f, t.minor * 2.0f);
         bool contact = (t.state == 3 || t.state == 4);
+        if (!contact) continue;   // hovering fingers aren't drawn
+        // an amber outline in the touch's shape, the notes' line weight
         NSAffineTransform* tf = [NSAffineTransform transform];
         [tf translateXBy:x yBy:y];
         [tf rotateByRadians:t.angle];
         NSBezierPath* p = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(-rx, -ry, 2 * rx, 2 * ry)];
         [p transformUsingAffineTransform:tf];
-        [(contact ? rgb(1.0, 0.80, 0.45, 0.72) : [NSColor colorWithWhite:1 alpha:0.2]) setFill];
-        [p fill];
+        [amber() setStroke];
+        p.lineWidth = 2.0;
+        [p stroke];
     }
 }
 @end
@@ -939,7 +1033,7 @@ static void usage() {
                  "usage: morphion [--layout grid|single] [--probe] [--mute X] [--mute-floor X] [--size-soft X] [--size-hard X]\n"
                  "                [--force-curve X] [--soft-ms X] [--hard-ms X] [--major-ref X]\n"
                  "                [--gain X] [--buffer N] [--coupling X] [--gap HZ] [--gap-2x HZ]\n"
-                 "                [--tilt X] [--gu X] [--gu-hz HZ] [--snapshot DIR]\n");
+                 "                [--tilt X] [--gu X] [--gu-hz HZ] [--snapshot DIR] [--frames DIR] [--waves N] [--wobble-div X]\n");
 }
 
 // Draw the canvas offscreen to <dir>/idle.png and <dir>/playing.png and exit (no audio,
@@ -960,6 +1054,8 @@ static int snapshot(const char* dir) {
     g_captured = true;
     g_flashTime[4] = now - 0.05;  g_flashForce[4] = 0.9f;   // ding just struck
     g_flashTime[1] = now - 0.30;  g_flashForce[1] = 0.3f;   // A4 swelling
+    g_roundPreview = true;
+    g_round[4] = 0.8f;  g_round[1] = 0.35f;  g_round[3] = 0.2f;
     {
         std::lock_guard<std::mutex> lock(g_uiMutex);
         g_uiTouches = {{0.52f, 0.47f, 11.0f, 8.0f, 2.1f, 1.0f, 4}, {0.20f, 0.80f, 7.5f, 6.9f, 1.57f, 0.3f, 1}};
@@ -968,6 +1064,65 @@ static int snapshot(const char* dir) {
     g_captured = false;
     view.settingsOpen = true;
     save(@"settings.png");
+    return 0;
+}
+
+// Run the engine offline and draw the canvas at 60 fps to <dir>/frame_NNNN.png (no audio,
+// no trackpad), for judging the note animation. Default settings, D Kurd grid.
+static int frames(const char* dir) {
+    [NSApplication sharedApplication];
+    g_set = Settings{};
+    buildLayout();
+    configureEngine();
+    NSRect frame = NSMakeRect(0, 0, 900, 640);
+    PadView* view = [[PadView alloc] initWithFrame:frame];
+    g_captured = true;
+    for (int i = 0; i < 9; ++i) { g_flashTime[i] = -10.0; g_flashForce[i] = 0.0f; }
+    g_slapTime = -10.0;
+    struct Hit { double t; int field; float x, y, force; };
+    // the ding near its centre, then hard and near the edge (more octave), then D4 at its edge,
+    // then F4 (the highest) with the ding, to compare speeds
+    const Hit hits[] = {{0.2, 4, 0.15f, 0.1f, 0.7f}, {2.6, 4, 0.6f, 0.1f, 0.9f}, {5.0, 3, 0.6f, 0.0f, 0.7f},
+                        {7.2, 0, 0.5f, 0.0f, 0.8f}, {7.2, 4, 0.5f, 0.0f, 0.8f}};
+    const double seconds = 9.5, fps = 60.0;
+    const int block = 64;
+    std::vector<float> buf(block), audio;
+    long done = 0;
+    size_t next = 0;
+    for (int f = 0; f < int(seconds * fps); ++f) {
+        double t = f / fps;
+        while (next < std::size(hits) && hits[next].t <= t) {
+            const Hit& h = hits[next++];
+            float ms = 1.6f - 0.7f * (h.force - 0.1f) / 0.9f;
+            g_engine.push({morphion::Event::Down, int(next), h.field, h.x, h.y, h.force, ms, 0.12f});
+            g_engine.push({morphion::Event::Up, int(next), 0, 0, 0, 0, 0, 0});
+            g_flashTime[h.field] = t;
+            g_flashForce[h.field] = h.force;
+        }
+        for (long target = long(t * g_sr); done < target; done += block) {
+            g_engine.process(buf.data(), nullptr, block);
+            audio.insert(audio.end(), buf.begin(), buf.end());
+        }
+        g_clock = t;
+        NSBitmapImageRep* rep = [view bitmapImageRepForCachingDisplayInRect:frame];
+        [view cacheDisplayInRect:frame toBitmapImageRep:rep];
+        NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        NSString* name = [NSString stringWithFormat:@"frame_%04d.png", f];
+        [png writeToFile:[[NSString stringWithUTF8String:dir] stringByAppendingPathComponent:name] atomically:YES];
+    }
+    // and the sound of the same run, 16-bit mono, for muxing with the frames
+    std::string wav = std::string(dir) + "/audio.wav";
+    if (FILE* fp = std::fopen(wav.c_str(), "wb")) {
+        uint32_t sr = uint32_t(g_sr), bytes = uint32_t(audio.size() * 2), riff = 36 + bytes, fmtLen = 16, rate = sr * 2;
+        uint16_t pcm = 1, ch = 1, align = 2, bits = 16;
+        std::fwrite("RIFF", 1, 4, fp); std::fwrite(&riff, 4, 1, fp); std::fwrite("WAVEfmt ", 1, 8, fp);
+        std::fwrite(&fmtLen, 4, 1, fp); std::fwrite(&pcm, 2, 1, fp); std::fwrite(&ch, 2, 1, fp);
+        std::fwrite(&sr, 4, 1, fp); std::fwrite(&rate, 4, 1, fp); std::fwrite(&align, 2, 1, fp); std::fwrite(&bits, 2, 1, fp);
+        std::fwrite("data", 1, 4, fp); std::fwrite(&bytes, 4, 1, fp);
+        for (float v : audio) { int16_t x = int16_t(std::clamp(v, -1.0f, 1.0f) * 32767.0f); std::fwrite(&x, 2, 1, fp); }
+        std::fclose(fp);
+    }
+    std::printf("wrote %d frames and audio.wav to %s\n", int(seconds * fps), dir);
     return 0;
 }
 
@@ -998,6 +1153,9 @@ int main(int argc, char** argv) {
         else if (a == "--gu") g_set.gu = std::atof(next());
         else if (a == "--gu-hz") g_cfg.guHz = std::atof(next());
         else if (a == "--snapshot") { const char* dir = next(); return snapshot(dir); }
+        else if (a == "--waves") g_waves = std::max(1, std::atoi(next()));
+        else if (a == "--wobble-div") g_wobbleDiv = std::max(1.0, std::atof(next()));
+        else if (a == "--frames") { const char* dir = next(); return frames(dir); }
         else { usage(); return 1; }
     }
     for (int i = 0; i < 9; ++i) { g_flashTime[i] = 0.0; g_flashForce[i] = 0.0f; }

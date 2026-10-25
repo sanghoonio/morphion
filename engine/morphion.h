@@ -89,6 +89,8 @@ public:
     double q(int mode) const { return q_[mode]; }
     double omega1() const { return w1_; }
     double outLevel() const { return outScale_ * w1_; }   // output per unit modal amplitude
+    double modeLevel(int n) const;   // output amplitude of one mode
+    double level() const;            // how loudly the field is ringing: its modes' levels summed in power
 
     double contactSigmaScale(double radius) const;
     const FieldParams& params() const { return p_; }
@@ -169,8 +171,8 @@ public:
     std::atomic<float> restFloor{0.15f};     // damping anywhere on the field, as a fraction of the centre's
     // A trackpad tap keeps the finger down 40-75 ms where steel would bounce it off in 1-2 ms,
     // so a resting finger only starts muting after a grace period, then fades in.
-    float restGraceMs = 100.0f;
-    float restRampMs = 80.0f;
+    float restGraceMs = 50.0f;
+    float restRampMs = 60.0f;
     // Peak limiter on the mix: looks 1.5 ms ahead and turns the gain down smoothly before a
     // peak would pass the ceiling, recovering over ~150 ms. It changes level only, so it
     // adds no new tones (a waveshaper made intermodulation buzz on stacked notes).
@@ -181,6 +183,13 @@ public:
     int fieldCount() const { return static_cast<int>(fields_.size()); }
     double fieldFreq(int i) const { return heard_[i]; }   // pitch heard, after link retuning
     const std::vector<Link>& links() const { return links_; }
+    // How loudly each field (and each of its modes) is ringing, before the gain, updated once
+    // per block. For drawing; readable from any thread.
+    static constexpr int kMaxFields = 16;
+    float fieldLevel(int i) const { return i >= 0 && i < kMaxFields ? levels_[i].load(std::memory_order_relaxed) : 0.0f; }
+    float modeLevel(int i, int n) const {
+        return i >= 0 && i < kMaxFields ? modeLevels_[i * kModes + n].load(std::memory_order_relaxed) : 0.0f;
+    }
 
 private:
     struct Finger {
@@ -242,6 +251,8 @@ private:
     std::array<double, 4> guProp_{};
     std::vector<double> guCouple_;   // absolute, per field
     std::array<Finger, kMaxFingers> fingers_{};
+    std::array<std::atomic<float>, kMaxFields> levels_{};
+    std::array<std::atomic<float>, kMaxFields * kModes> modeLevels_{};
     SpscQueue<Event, 1024> queue_;
 };
 
