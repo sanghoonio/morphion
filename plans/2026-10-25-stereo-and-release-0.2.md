@@ -111,3 +111,9 @@ The app's terminal output (run `mac/build/morphion` from Terminal) shows the str
   - Each device's touch sizes are now scaled by the reference electrode area (22.2 mm²) over its own, from `MTDeviceGetSensorDimensions` and `MTDeviceGetSensorSurfaceDimensions`, clamped 0.5–2. That gives ×1.00 for the built-in and ×0.85 for the Magic Trackpad 2, and needs no per-model list.
   - The user confirmed it by feel.
 - **Released as 0.2.**
+- **0.2.1:** settings didn't save in the installed app. Inside the bundle, `NSUserDefaults initWithSuiteName:` with the app's own bundle identifier returns nil. The app now uses the standard defaults in the bundle (the same domain) and the named suite outside it, for the `build/morphion` symlink.
+- **0.2.2:**
+  - A Magic Trackpad stopped playing after it switched from USB to Bluetooth and back.
+  - Cause: its device ID differs between USB and Bluetooth. The stale USB entry was kept, apparently still reporting itself running, so it was never restarted.
+  - Fix: trackpads now sit in fixed slots. One that drops out of `MTDeviceCreateList()` is stopped and forgotten, with its fingers lifted, and starts fresh when it returns. IOKit arrival and termination notifications for `AppleMultitouchDevice` trigger a rescan at 0.5 s and 1.5 s, alongside the 2 s timer.
+  - The user confirmed the fix.

@@ -24,6 +24,7 @@
 #import <Cocoa/Cocoa.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreAudio/CoreAudio.h>
+#include <IOKit/IOKitLib.h>
 #include <dlfcn.h>
 
 #include <algorithm>
@@ -429,10 +430,14 @@ static int touchCallback(MTDeviceRef dev, const MTTouch* touches, int n, double,
 // ---------------------------------------------------------------- audio
 
 static AudioUnit g_unit;
-// Trackpads being listened to (main thread). Rescanned every 2 s, so a Magic Trackpad
-// connected (or reconnected) while the app runs starts playing.
-struct MtDevice { MTDeviceRef ref; uint64_t id; };
-static std::vector<MtDevice> g_devices;
+// Trackpads being listened to (main thread), one per slot. Rescanned every 2 s and whenever
+// IOKit reports a multitouch device arriving or leaving (see watchTrackpads), so a Magic
+// Trackpad connected, reconnected or switched between USB and Bluetooth while the app runs
+// keeps playing. A trackpad's device ID differs between USB and Bluetooth, and a device
+// object kept from before a disconnect can still claim to be running, so a trackpad that
+// drops out of the list is stopped and forgotten, and starts fresh when it comes back.
+struct MtDevice { MTDeviceRef ref = nullptr; uint64_t id = 0; };
+static std::array<MtDevice, kMaxDevices> g_devices{};
 
 static uint64_t deviceId(MTDeviceRef d) {
     uint64_t id = 0;
@@ -444,49 +449,109 @@ static void startDevice(MTDeviceRef d, int slot) {
     CFRetain(d);
     g_devSizeScale[slot] = sizeScaleFor(d);
     g_devSlot[slot] = d;
+    g_devices[slot] = {d, deviceId(d)};
     MTRegisterContactFrameCallback(d, touchCallback);
     MTDeviceStart(d, 0);
     g_logNextFrame = true;
 }
 
-// Start any trackpad not yet playing, or one that stopped (unplugged and back). Returns the
-// number of trackpads playing.
+// Stop a slot's device and lift any of its fingers still down (no more frames will come).
+static void dropDevice(int slot) {
+    MtDevice& m = g_devices[slot];
+    if (!m.ref) return;
+    MTUnregisterContactFrameCallback(m.ref, touchCallback);
+    MTDeviceStop(m.ref);
+    CFRelease(m.ref);
+    {
+        std::lock_guard<std::mutex> serial(g_touchMutex);   // the engine queue's one producer at a time
+        g_devSlot[slot] = nullptr;
+        for (auto& t : g_tracks) {
+            if (t.used && t.id / 1000 == slot) {
+                if (t.down) g_engine.push({morphion::Event::Up, t.id, 0, 0, 0, 0, 0, 0});
+                t.used = false;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_uiMutex);
+        std::erase_if(g_uiTouches, [&](const UiTouch& u) { return u.device == slot; });
+    }
+    m = {};
+}
+
+static int playingCount() {
+    int n = 0;
+    for (const auto& m : g_devices) n += m.ref != nullptr;
+    return n;
+}
+
+// Start any trackpad not yet playing, or one that stopped; forget any that are gone. Returns
+// the number of trackpads playing.
 static int scanDevices() {
     if (!MTDeviceCreateList) {   // fall back to the default device only
-        if (g_devices.empty()) {
+        if (!g_devices[0].ref) {
             if (MTDeviceRef d = MTDeviceCreateDefault()) {
                 startDevice(d, 0);
                 CFRelease(d);
-                g_devices.push_back({d, deviceId(d)});
             }
         }
-        return int(g_devices.size());
+        return playingCount();
     }
     CFArrayRef list = MTDeviceCreateList();
-    if (!list) return int(g_devices.size());
-    for (CFIndex i = 0; i < CFArrayGetCount(list); ++i) {
-        MTDeviceRef d = (MTDeviceRef)CFArrayGetValueAtIndex(list, i);
-        uint64_t id = deviceId(d);
-        auto it = std::find_if(g_devices.begin(), g_devices.end(), [&](const MtDevice& m) { return m.id == id; });
-        if (it != g_devices.end()) {
-            bool running = !MTDeviceIsRunning || MTDeviceIsRunning(it->ref);
-            if (running) continue;
-            int slot = int(it - g_devices.begin());
-            MTUnregisterContactFrameCallback(it->ref, touchCallback);
-            MTDeviceStop(it->ref);
-            CFRelease(it->ref);
-            startDevice(d, slot);
-            it->ref = d;
-            logEvent("trackpad %d (id %llx) restarted, touch sizes x%.2f", slot, (unsigned long long)id, g_devSizeScale[slot].load());
-        } else if (g_devices.size() < size_t(kMaxDevices)) {
-            int slot = int(g_devices.size());
-            startDevice(d, slot);
-            g_devices.push_back({d, id});
-            logEvent("trackpad %d (id %llx) playing, touch sizes x%.2f", slot, (unsigned long long)id, g_devSizeScale[slot].load());
+    if (!list) return playingCount();
+    const CFIndex n = CFArrayGetCount(list);
+    std::vector<uint64_t> ids(n);
+    for (CFIndex i = 0; i < n; ++i) ids[i] = deviceId((MTDeviceRef)CFArrayGetValueAtIndex(list, i));
+    for (int k = 0; k < kMaxDevices; ++k) {
+        if (g_devices[k].ref && std::find(ids.begin(), ids.end(), g_devices[k].id) == ids.end()) {
+            logEvent("trackpad %d (id %llx) gone", k, (unsigned long long)g_devices[k].id);
+            dropDevice(k);
         }
     }
+    for (CFIndex i = 0; i < n; ++i) {
+        MTDeviceRef d = (MTDeviceRef)CFArrayGetValueAtIndex(list, i);
+        int slot = -1;
+        for (int k = 0; k < kMaxDevices; ++k) if (g_devices[k].ref && g_devices[k].id == ids[i]) slot = k;
+        if (slot >= 0) {
+            if (!MTDeviceIsRunning || MTDeviceIsRunning(g_devices[slot].ref)) continue;
+            dropDevice(slot);
+            startDevice(d, slot);
+            logEvent("trackpad %d (id %llx) restarted, touch sizes x%.2f", slot, (unsigned long long)ids[i], g_devSizeScale[slot].load());
+            continue;
+        }
+        for (int k = 0; k < kMaxDevices; ++k) if (!g_devices[k].ref) { slot = k; break; }
+        if (slot < 0) continue;
+        startDevice(d, slot);
+        logEvent("trackpad %d (id %llx) playing, touch sizes x%.2f", slot, (unsigned long long)ids[i], g_devSizeScale[slot].load());
+    }
     CFRelease(list);
-    return int(g_devices.size());
+    return playingCount();
+}
+
+// Rescan shortly after IOKit sees a multitouch device arrive or leave (the multitouch list
+// catches up a moment later), so a quick unplug and replug isn't missed between timer scans.
+static void scanSoon() {
+    for (double delay : {0.5, 1.5})
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (scanDevices() > 0 && g_error.title == kNoTrackpad.title) g_error = {nil, nil};
+        });
+}
+
+static void trackpadsChanged(void*, io_iterator_t it) {
+    while (io_object_t o = IOIteratorNext(it)) IOObjectRelease(o);   // drain, which also re-arms the notification
+    scanSoon();
+}
+
+static void watchTrackpads() {
+    IONotificationPortRef port = IONotificationPortCreate(kIOMainPortDefault);
+    CFRunLoopAddSource(CFRunLoopGetMain(), IONotificationPortGetRunLoopSource(port), kCFRunLoopDefaultMode);
+    for (const char* type : {kIOFirstMatchNotification, kIOTerminatedNotification}) {
+        io_iterator_t it = 0;
+        if (IOServiceAddMatchingNotification(port, type, IOServiceMatching("AppleMultitouchDevice"), trackpadsChanged,
+                                             nullptr, &it) == KERN_SUCCESS) {
+            while (io_object_t o = IOIteratorNext(it)) IOObjectRelease(o);   // the devices already there
+        }
+    }
 }
 
 // Stop touch input and audio before the process exits. [NSApp run] never returns:
@@ -497,6 +562,7 @@ static void shutdown() {
     if (done) return;
     done = true;
     for (auto& d : g_devices) {
+        if (!d.ref) continue;
         MTUnregisterContactFrameCallback(d.ref, touchCallback);
         MTDeviceStop(d.ref);
     }
@@ -1216,6 +1282,7 @@ static double wobbleFor(float level, double maxPts) {
 
     // pick up trackpads connected (or reconnected) while running
     if (g_scanTrackpads) {
+        watchTrackpads();
         [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(NSTimer*) {
             if (scanDevices() > 0 && g_error.title == kNoTrackpad.title) g_error = {nil, nil};
         }];

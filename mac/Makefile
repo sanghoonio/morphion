@@ -1,6 +1,6 @@
 CXX ?= clang++
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -fobjc-arc
-FRAMEWORKS = -framework Cocoa -framework AudioToolbox -framework CoreAudio
+FRAMEWORKS = -framework Cocoa -framework AudioToolbox -framework CoreAudio -framework IOKit
 
 APP = build/morphion.app
 EXE = $(APP)/Contents/MacOS/morphion
