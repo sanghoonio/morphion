@@ -115,8 +115,8 @@ struct Config {
 static Config g_cfg;
 
 // User settings: the settings pane edits these and they persist between launches
-// (NSUserDefaults, domain kDefaults, named explicitly so the app and the build/morphion
-// symlink share them). Command-line flags override them for one run.
+// (NSUserDefaults, domain kDefaults, shared by the app and the build/morphion symlink:
+// see defaults()). Command-line flags override them for one run.
 struct Settings {
     int scale = 0;           // index into kScales
     int key = 5;             // index into kKeys: D
@@ -199,8 +199,13 @@ static NSString* layoutTitle() {
 
 static NSString* const kDefaults = @"io.github.sanghoonio.morphion";   // the bundle identifier
 
+// The same domain either way: inside the bundle it is the standard defaults (macOS refuses a
+// suite named after the app's own bundle identifier, and returns nil); outside it, through
+// the build/morphion symlink, there is no bundle identifier, so it is opened by name.
 static NSUserDefaults* defaults() {
-    static NSUserDefaults* d = [[NSUserDefaults alloc] initWithSuiteName:kDefaults];
+    static NSUserDefaults* d = [NSBundle.mainBundle.bundleIdentifier isEqualToString:kDefaults]
+                                   ? NSUserDefaults.standardUserDefaults
+                                   : [[NSUserDefaults alloc] initWithSuiteName:kDefaults];
     return d;
 }
 
