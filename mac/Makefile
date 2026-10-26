@@ -9,9 +9,9 @@ EXE = $(APP)/Contents/MacOS/morphion
 # command-line flags still work: mac/build/morphion --probe
 all: $(EXE) $(APP)/Contents/Info.plist $(APP)/Contents/Resources/AppIcon.icns build/morphion
 
-$(EXE): main.mm ../engine/morphion.cpp ../engine/morphion.h
+$(EXE): main.mm ../engine/morphion.cpp ../engine/morphion.h ../engine/score.cpp ../engine/score.h Info.plist
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -o $@ main.mm ../engine/morphion.cpp $(FRAMEWORKS)
+	$(CXX) $(CXXFLAGS) -DMORPHION_VERSION='"$(VERSION)"' -o $@ main.mm ../engine/morphion.cpp ../engine/score.cpp $(FRAMEWORKS)
 
 $(APP)/Contents/Info.plist: Info.plist
 	@mkdir -p $(dir $@)

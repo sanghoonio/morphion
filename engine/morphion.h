@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace morphion {
@@ -53,6 +54,22 @@ struct GuParams {
     double couple = 0.2;     // 0 turns the cavity off
     double dingWeight = 1.0;
     double otherWeight = 0.15;
+};
+
+// The slap: a palm on the shell between the notes. Each part has a level so the mix can be
+// tuned by ear (render_test --slap-options). The defaults are a skin smack and a metallic ring
+// over a light thump. Set before audio starts.
+struct SlapParams {
+    double gu = 0.2;           // push of air into the cavity: the low thump
+    double knock = 1.0;        // the shell's low body modes (205-3150 Hz), damped fast by the palm
+    double knockDecay = 1.0;   // multiplies their decay times (longer = the bowl rings on)
+    double hollow = 0.0;       // the air inside the shell: its modes above the Gu (0.3-2 kHz)
+    double noise = 0.85;       // skin on metal: level of the noise burst
+    double noiseMs = 10.0;     // ... and its length
+    double noiseLp = 0.45;     // ... one-pole low-pass coefficient: higher = brighter
+    double ring = 0.8;         // metallic ring: high, inharmonic shell modes (0.8-7 kHz)
+    double ringDecay = 1.0;    // multiplies the ring's decay times
+    double notes = 0.08;       // how hard every note is touched through the shell
 };
 
 struct Link {
@@ -162,8 +179,15 @@ public:
 
     bool push(const Event& e) { return queue_.push(e); }   // any one non-audio thread
 
-    // Audio thread: no allocation, no locks.
+    // Audio thread: no allocation, no locks. Any frame count: the engine renders in fixed
+    // kBlock-sample blocks and hands them out, so its output depends only on the events and
+    // the block each one landed in, never on how the host chunks the audio. Queued events are
+    // applied at the start of the next block.
     void process(float* left, float* right, int frames);
+    static constexpr int kBlock = 32;
+    // Index of the sample where the next block starts (counted from configure): where an event
+    // pushed now takes effect. Audio thread, or any thread while audio is stopped.
+    int64_t nextBlockSample() const { return blockStart_; }
 
     // settable from any thread while running
     std::atomic<float> gain{1.0f};           // a hard single strike peaks near -0.5 dBFS (just into the limiter knee)
@@ -185,6 +209,7 @@ public:
     std::atomic<float> stereoWidth{0.0f};
     void setFieldPan(int field, float pan);   // after configure, before audio starts
     std::atomic<float> radiationTilt{0.0f};   // live override of FieldParams::radiationTilt
+    SlapParams slapParams;                    // read when a slap lands; set before audio starts
     int fieldCount() const { return static_cast<int>(fields_.size()); }
     double fieldFreq(int i) const { return heard_[i]; }   // pitch heard, after link retuning
     const std::vector<Link>& links() const { return links_; }
@@ -208,6 +233,10 @@ private:
 
     void handle(const Event& e);
     void updateRest(int field);
+    void renderBlock();
+    std::array<float, kBlock> blockL_{}, blockR_{};
+    int blockPos_ = kBlock;       // samples of the current block already handed out
+    int64_t blockStart_ = 0;
 
     std::vector<Field> fields_;
     std::vector<Link> links_;
@@ -250,6 +279,14 @@ private:
     std::array<double, kShellModes> shellQ_{}, shellV_{}, shellOmega_{};
     int slapLeft_ = 0, slapLen_ = 1;     // palm contact: the shell is pushed over a few ms, not instantly
     double slapForce_ = 0.0, slapNorm_ = 1.0;
+    static constexpr int kAirModes = 7;
+    std::array<std::array<double, 4>, kAirModes> airProp_{};
+    std::array<double, kAirModes> airQ_{}, airV_{}, airW_{};
+    int airLeft_ = 0;
+    static constexpr int kRingModes = 14;
+    std::array<std::array<double, 4>, kRingModes> ringProp_{};
+    std::array<double, kRingModes> ringQ_{}, ringV_{}, ringW_{};
+    int ringLeft_ = 0;                   // samples until the ring is inaudible
     int noiseLeft_ = 0;
     double noiseEnv_ = 0.0, noiseDecay_ = 0.0, noiseHp_ = 0.0, noiseLp_ = 0.0, noisePrev_ = 0.0;
     uint32_t noiseSeed_ = 12345u;

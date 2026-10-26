@@ -24,7 +24,7 @@ open mac/build/morphion.app
 - **Play** (or Return) starts playing. The cursor is frozen and hidden so taps land on the pan. **Esc** stops.
 - Where you strike inside a note changes its tone. Harder hits are louder and brighter.
 - A finger left resting on a note mutes it, as on a real pan. Quick taps don't.
-- **Space** slaps the shell: a low thump from the cavity and a short knock.
+- **Space** slaps the shell: a skin smack and a short metallic ring over a light thump from the cavity.
 - The **gear** next to Play opens settings:
   - scale: Kurd, Celtic Minor, Hijaz, Pygmy, Integral, Chinese Pentatonic
   - key
@@ -49,9 +49,35 @@ open mac/build/morphion.app
 
 The numbers come from published handpan measurements where they exist (see `docs/handpan-acoustics.md`).
 
+## Scores
+
+A piece is a plain text file: the settings, then one line per strike, slap or setting change. It renders bit for bit at the engine's fixed 48 kHz, and is easy to write by hand or generate.
+
+```
+# morphion 0.3
+scale = Kurd
+key = C#
+
+0.000   C#3  0.72                  # a tap: time in seconds, note, force (0.1-1)
+1.500   G#3  0.45  @0.20,0.05      # at a spot on the note
+2.100   E4   0.50  hold 300        # finger left down 300 ms, which mutes the note
+3.000   slap 0.6
+4.000   set stereo 0.8             # change a live setting
+```
+
+The first line names the release that wrote the file. Header settings default to the app's (`scale`, `key`, `layout`, `gain`, `sustain`, `swell`, `tilt`, `gu`, `gu_hz`, `gap`, `gap_2x`, `mute`, `mute_floor`, `stereo`, `attack`); `set` changes the live ones mid-piece. Recordings use a full form with finger ids, slides and lifts (`down`, `move`, `up`); see `engine/score.h`. `scores/AGENTS.md` is a complete guide to writing scores, for people or AI agents. Anything a release doesn't know is an error naming the line, so files from other releases play whenever they only use what it knows.
+
+```
+make -C engine
+engine/build/render_test --play scores/my-piece.txt out.wav
+engine/build/render_test --rewrite scores/my-piece.txt   # print it in full form
+engine/build/render_test --check scores/my-piece.txt     # playable with two hands?
+```
+
 ## Layout
 
-- `engine/`: the C++ real-time engine (`morphion.h/.cpp`) and `render_test`, which renders strikes to WAV without the app.
+- `engine/`: the C++ real-time engine (`morphion.h/.cpp`), the score format and player (`score.h/.cpp`), and `render_test`, which renders strikes and scores to WAV without the app.
+- `scores/`: pieces as score files.
 - `mac/`: the Mac app (Objective-C++, one file), its Makefile, Info.plist and icon.
 - `scripts/`: Python reference models (`one_field.py`, `multi_field.py`) and the A/B render scripts used to tune the sound. Run them with `uv run scripts/<name>.py`. `uv run scripts/multi_field.py --check` compares the engine against the Python model.
 - `docs/`: research notes on handpan acoustics.

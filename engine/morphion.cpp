@@ -326,17 +326,51 @@ void Engine::configure(double sampleRate, const std::vector<double>& fieldFreqs,
     static const double shellHz[kShellModes] = {205, 465, 815, 1310, 2060, 3150};
     static const double shellT60[kShellModes] = {0.28, 0.20, 0.13, 0.09, 0.06, 0.04};
     for (int k = 0; k < kShellModes; ++k) {
-        double dt = 1.0 / sampleRate, w = 2.0 * kPi * shellHz[k], s = kLn1000 / shellT60[k];
+        double dt = 1.0 / sampleRate, w = 2.0 * kPi * shellHz[k], s = kLn1000 / (shellT60[k] * slapParams.knockDecay);
         double d = std::sqrt(w * w - s * s), e = std::exp(-s * dt), c = std::cos(d * dt), sn = std::sin(d * dt);
         shellProp_[k] = {e * (c + s / d * sn), e * sn / d, -e * w * w / d * sn, e * (c - s / d * sn)};
         shellOmega_[k] = w;
         shellQ_[k] = shellV_[k] = 0.0;
     }
+    // the air inside the shell: a squat closed bowl ~50 cm across and ~25 cm deep has its
+    // first standing waves from ~350 Hz up; inharmonic, moderately damped by the Gu opening
+    static const double airHz[kAirModes] = {355, 590, 760, 985, 1240, 1510, 1880};
+    static const double airT60[kAirModes] = {0.36, 0.30, 0.26, 0.22, 0.18, 0.15, 0.12};
+    for (int k = 0; k < kAirModes; ++k) {
+        double dt = 1.0 / sampleRate, w = 2.0 * kPi * airHz[k], sg = kLn1000 / airT60[k], d = std::sqrt(w * w - sg * sg);
+        double e = std::exp(-sg * dt), c = std::cos(d * dt), sn = std::sin(d * dt);
+        airProp_[k] = {e * (c + sg / d * sn), e * sn / d, -e * w * w / d * sn, e * (c - sg / d * sn)};
+        airW_[k] = w;
+        airQ_[k] = airV_[k] = 0.0;
+    }
+    airLeft_ = 0;
+    // the slap's metallic ring: log-spaced 0.8-7 kHz, jittered so they don't line up harmonically,
+    // decays ~0.5 s at the bottom to ~0.1 s at the top (scaled by slapParams.ringDecay)
+    uint32_t h = 0x9e3779b9u;
+    for (int k = 0; k < kRingModes; ++k) {
+        h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+        double jitter = (h & 0xffff) / 65535.0 - 0.5;
+        double hz = 800.0 * std::pow(7000.0 / 800.0, (k + 0.5 + 0.7 * jitter) / kRingModes);
+        double t60 = std::max(0.02, 0.5 * std::pow(800.0 / hz, 0.75) * slapParams.ringDecay);
+        double dt = 1.0 / sampleRate, w = 2.0 * kPi * hz, sg = kLn1000 / t60, d = std::sqrt(w * w - sg * sg);
+        double e = std::exp(-sg * dt), c = std::cos(d * dt), sn = std::sin(d * dt);
+        ringProp_[k] = {e * (c + sg / d * sn), e * sn / d, -e * w * w / d * sn, e * (c - sg / d * sn)};
+        ringW_[k] = w;
+        ringQ_[k] = ringV_[k] = 0.0;
+    }
+    ringLeft_ = 0;
     noiseLeft_ = 0;
     slapLeft_ = 0;
     for (auto& v : attacks_) v.on = false;
     noiseEnv_ = noiseHp_ = noiseLp_ = noisePrev_ = 0.0;
     noiseDecay_ = std::exp(-1.0 / (0.0015 * sampleRate));
+    // a known starting state, so the same events always render the same samples
+    noiseSeed_ = 12345u;
+    attackSeed_ = 987654321u;
+    Event stale;
+    while (queue_.pop(stale)) {}
+    blockPos_ = kBlock;
+    blockStart_ = 0;
 }
 
 void Engine::startAttack(int field, double level, double force, double contactMs) {
@@ -385,8 +419,9 @@ void Engine::setFieldPan(int field, float pan) {
 }
 
 void Engine::slap(double force) {
+    const SlapParams& sp = slapParams;
     // cavity: a push of air, peaking around a medium note's level
-    if (guOsc_) guV_ += force * 0.55 / guNorm_;
+    if (guOsc_) guV_ += force * sp.gu / guNorm_;
     // shell knock: pushed over a 1.5 ms contact (see process); longer would dull the knock
     slapLen_ = std::max(2, int(0.0015 * sr_));
     slapLeft_ = slapLen_;
@@ -396,11 +431,28 @@ void Engine::slap(double force) {
         double u = (i + 0.5 - slapLen_ / 2.0) / (slapLen_ / 6.0);
         slapNorm_ += std::exp(-0.5 * u * u);
     }
-    // skin on metal: ~4 ms of noise
-    noiseLeft_ = int(0.004 * sr_);
-    noiseEnv_ = force * 0.10;
+    // skin on metal: a short burst of noise
+    noiseLeft_ = int(sp.noiseMs * 1e-3 * sr_);
+    noiseEnv_ = force * sp.noise;
+    noiseDecay_ = std::exp(-1.0 / (std::max(0.5, sp.noiseMs * 0.375) * 1e-3 * sr_));
+    // the air inside rings from the push, the lower modes most
+    if (sp.hollow > 0.0) {
+        static const double airAmp[kAirModes] = {1.0, 0.8, 0.7, 0.55, 0.45, 0.35, 0.25};
+        for (int k = 0; k < kAirModes; ++k) airV_[k] += sp.hollow * force * 0.22 * airAmp[k] * airW_[k] * (2.0 * kPi * 355.0 / airW_[k]);
+        airLeft_ = int(1.0 * sr_);
+    }
+    // metallic ring: the palm's leading edge lands sharply (~0.06 ms) even though the contact is
+    // long, so it reaches the high shell modes the smooth push can't
+    if (sp.ring > 0.0) {
+        const double sd = 0.06e-3;
+        for (int k = 0; k < kRingModes; ++k) {
+            double w = ringW_[k], edge = std::exp(-0.5 * (w * sd) * (w * sd));
+            ringV_[k] += sp.ring * force * 0.07 * edge * w * std::pow(800.0 * 2.0 * kPi / w, 0.5);
+        }
+        ringLeft_ = int(1.2 * sp.ringDecay * sr_);
+    }
     // every field rings faintly through the shell: a broad, slow, soft touch near its rim
-    for (auto& f : fields_) f.strike(0.85, 0.0, force * 0.08, 5.0, 0.6);
+    for (auto& f : fields_) f.strike(0.85, 0.0, force * sp.notes, 5.0, 0.6);
 }
 
 // A resting finger mutes most of the field, not just the very centre: the
@@ -467,6 +519,28 @@ void Engine::handle(const Event& e) {
 }
 
 void Engine::process(float* left, float* right, int frames) {
+    for (int done = 0; done < frames;) {
+        if (blockPos_ == kBlock) {
+            renderBlock();
+            blockPos_ = 0;
+        }
+        int n = std::min(frames - done, kBlock - blockPos_);
+        for (int i = 0; i < n; ++i) {
+            float yl = blockL_[blockPos_ + i], yr = blockR_[blockPos_ + i];
+            if (right) {
+                left[done + i] = yl;
+                right[done + i] = yr;
+            } else {
+                left[done + i] = 0.5f * (yl + yr);   // one buffer: a mono mix (identical to either channel at width 0)
+            }
+        }
+        blockPos_ += n;
+        done += n;
+    }
+}
+
+void Engine::renderBlock() {
+    constexpr int frames = kBlock;
     Event e;
     while (queue_.pop(e)) handle(e);
 
@@ -537,10 +611,30 @@ void Engine::process(float* left, float* right, int frames) {
             --slapLeft_;
         }
         static const double shellAmp[kShellModes] = {0.30, 0.22, 0.16, 0.10, 0.06, 0.04};
+        if (airLeft_ > 0) {
+            for (int k = 0; k < kAirModes; ++k) {
+                const auto& m = airProp_[k];
+                double q = m[0] * airQ_[k] + m[1] * airV_[k], v = m[2] * airQ_[k] + m[3] * airV_[k];
+                airQ_[k] = q;
+                airV_[k] = v;
+                s += v / airW_[k];
+            }
+            --airLeft_;
+        }
+        if (ringLeft_ > 0) {
+            for (int k = 0; k < kRingModes; ++k) {
+                const auto& m = ringProp_[k];
+                double q = m[0] * ringQ_[k] + m[1] * ringV_[k], v = m[2] * ringQ_[k] + m[3] * ringV_[k];
+                ringQ_[k] = q;
+                ringV_[k] = v;
+                s += v / ringW_[k];
+            }
+            --ringLeft_;
+        }
         for (int k = 0; k < kShellModes; ++k) {
             const auto& m = shellProp_[k];
             double q = m[0] * shellQ_[k] + m[1] * shellV_[k], v = m[2] * shellQ_[k] + m[3] * shellV_[k];
-            v += push * shellAmp[k] * shellOmega_[k];
+            v += push * shellAmp[k] * slapParams.knock * shellOmega_[k];
             shellQ_[k] = q;
             shellV_[k] = v;
             s += v / shellOmega_[k];
@@ -575,7 +669,7 @@ void Engine::process(float* left, float* right, int frames) {
             double white = (noiseSeed_ >> 8) / double(1 << 24) * 2.0 - 1.0;
             noiseHp_ = 0.95 * (noiseHp_ + white - noisePrev_);   // drop the lows
             noisePrev_ = white;
-            noiseLp_ += 0.45 * (noiseHp_ - noiseLp_);            // and the harshest highs
+            noiseLp_ += slapParams.noiseLp * (noiseHp_ - noiseLp_);   // and the harshest highs
             s += noiseLp_ * noiseEnv_;
             noiseEnv_ *= noiseDecay_;
             --noiseLeft_;
@@ -598,13 +692,10 @@ void Engine::process(float* left, float* right, int frames) {
             yl = std::clamp(limDelay_[limPos_] * limGain_, -1.0f, 1.0f);   // the oldest samples, level-matched;
             yr = std::clamp(limDelayR_[limPos_] * limGain_, -1.0f, 1.0f);  // the clamp is a rarely touched safety net
         }
-        if (right) {
-            left[i] = yl;
-            right[i] = yr;
-        } else {
-            left[i] = 0.5f * (yl + yr);   // one buffer: a mono mix (identical to either channel at width 0)
-        }
+        blockL_[i] = yl;
+        blockR_[i] = yr;
     }
+    blockStart_ += kBlock;
     for (size_t i = 0; i < fields_.size() && i < size_t(kMaxFields); ++i) {
         double e = 0.0;
         for (int n = 0; n < kModes; ++n) {

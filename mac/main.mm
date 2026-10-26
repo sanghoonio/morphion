@@ -39,6 +39,7 @@
 #include <vector>
 
 #include "../engine/morphion.h"
+#include "../engine/score.h"
 
 // ---------------------------------------------------------------- MultitouchSupport
 
@@ -135,25 +136,12 @@ struct Settings {
 };
 static Settings g_set;
 
-// Scales: a ding plus 8 notes, as semitones above the ding. Pygmy, Integral and the
-// gong-mode pentatonic are built from their usual definitions, not maker charts.
-struct ScaleDef { const char* name; int semis[8]; };
-static const ScaleDef kScales[] = {
-    {"Kurd", {7, 8, 10, 12, 14, 15, 17, 19}},
-    {"Celtic Minor", {7, 10, 12, 14, 15, 17, 19, 22}},
-    {"Hijaz", {7, 8, 11, 12, 14, 15, 17, 19}},
-    {"Pygmy", {7, 10, 12, 14, 15, 19, 22, 24}},
-    {"Integral", {7, 8, 10, 12, 14, 15, 19, 22}},
-    {"Chinese Pentatonic", {7, 9, 12, 14, 16, 19, 21, 24}},
-};
-constexpr int kScaleCount = int(sizeof(kScales) / sizeof(kScales[0]));
-// The ding's pitch: A2 up to G#3 (MIDI 45-56).
-static const char* kKeys[12] = {"A", "Bb", "B", "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab"};
-static const char* kNoteNames[12] = {"C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"};
+// Scales, keys and note names live with the score format (engine/score.h).
+using morphion::score::kScales;
+using morphion::score::kScaleCount;
+using morphion::score::kKeys;
 
-// The playable fields for the current settings. Grid fields are numbered row * 3 + col,
-// rows top to bottom; the ding is the centre and the 8 others zigzag upwards from the
-// bottom middle (lowest) to the top middle (highest), as on the D Kurd layout.
+// The playable fields for the current settings, laid out by morphion::score::layout.
 struct LayoutTable {
     int count = 9;
     int ding = 4;            // -1 in the single layout
@@ -165,28 +153,14 @@ static std::mutex g_layoutMutex;          // the touch thread reads names for --
 static std::atomic<bool> g_single{false}; // read by the touch thread
 static std::atomic<float> g_sizeHard{1.3f};
 
-static void noteName(int midi, char* out) {
-    std::snprintf(out, 6, "%s%d", kNoteNames[midi % 12], midi / 12 - 1);
-}
-
 static void buildLayout() {
     LayoutTable L;
-    int ding = 45 + std::clamp(g_set.key, 0, 11);
-    const ScaleDef& sc = kScales[std::clamp(g_set.scale, 0, kScaleCount - 1)];
-    auto hz = [](int m) { return 440.0 * std::pow(2.0, (m - 69) / 12.0); };
-    if (g_set.single) {
-        L.count = 1;
-        L.ding = -1;
-        L.freq[0] = hz(ding + 12);
-        noteName(ding + 12, L.name[0]);
-    } else {
-        static const int zigzag[8] = {7, 6, 8, 3, 5, 0, 2, 1};
-        L.freq[4] = hz(ding);
-        noteName(ding, L.name[4]);
-        for (int i = 0; i < 8; ++i) {
-            L.freq[zigzag[i]] = hz(ding + sc.semis[i]);
-            noteName(ding + sc.semis[i], L.name[zigzag[i]]);
-        }
+    auto sl = morphion::score::layout(g_set.scale, g_set.key, g_set.single);
+    L.count = sl.count;
+    L.ding = g_set.single ? -1 : 4;
+    for (int i = 0; i < sl.count; ++i) {
+        L.freq[i] = sl.freq[i];
+        std::snprintf(L.name[i], sizeof L.name[i], "%s", morphion::score::noteName(sl.midi[i]).c_str());
     }
     std::lock_guard<std::mutex> lock(g_layoutMutex);
     g_layout = L;
