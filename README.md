@@ -6,8 +6,6 @@ A handpan you play on a Mac trackpad. The sound comes from a physical model of t
 
 Download `morphion-<version>-macos.zip` from [Releases](https://github.com/sanghoonio/morphion/releases), unzip it and move `morphion.app` to Applications. It needs an Apple silicon Mac with macOS 13 or later and has been tested on macOS 15.
 
-The app isn't notarized by Apple, so macOS blocks it the first time. Open it once, then go to System Settings → Privacy & Security and click Open Anyway next to the message about morphion.
-
 ## Build from source
 
 Needs the Xcode command line tools (`clang++`, `make`), and [uv](https://docs.astral.sh/uv/) for the Python scripts (optional).
@@ -47,7 +45,7 @@ open mac/build/morphion.app
 - Notes are placed left to right by their column on the grid, the ding in the middle. Notes swelling in sympathy sound from their own side.
 - The output goes through a lookahead peak limiter that turns the level down rather than distorting it.
 
-The numbers come from published handpan measurements where they exist (see `docs/handpan-acoustics.md`), and were tuned by ear against recordings where they don't.
+The numbers come from published handpan measurements where they exist (see `docs/handpan-acoustics.md`).
 
 ## Layout
 
@@ -56,10 +54,7 @@ The numbers come from published handpan measurements where they exist (see `docs
 - `scripts/`: Python reference models (`one_field.py`, `multi_field.py`) and the A/B render scripts used to tune the sound. Run them with `uv run scripts/<name>.py`. `uv run scripts/multi_field.py --check` compares the engine against the Python model.
 - `docs/`: research notes on handpan acoustics.
 - `plans/`: design plans and implementation logs.
-- `reference/recordings/`: sources and licences of the reference recordings. The audio isn't in the repo; download it from the links in its README.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The reference recordings listed in `reference/recordings/` are not included and keep their own licences.
-
-Inspired by [Orphion](https://www.orphion.de/), the touch instrument for iPad that turned contact size into expression.
+MIT. Inspired by [Orphion](https://www.orphion.de/).

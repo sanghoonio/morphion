@@ -1,6 +1,6 @@
 ---
 date: 2026-10-25
-status: in-progress
+status: complete
 model: Claude Opus 5.5
 description: For 0.2, stereo placement of the notes, Strike click and Slap sliders, and tests of sleep/wake, audio device changes and trackpad choice
 ---
@@ -96,3 +96,18 @@ The app's terminal output (run `mac/build/morphion` from Terminal) shows the str
   - the first touch frame after start and after each wake;
   - default output device changes (device, its rate, the engine's rate).
 - **Tests 1–3: not run yet.** They need the user's hardware.
+- **Test results:**
+  - Sleep and wake is fine: touches resumed after four wakes, including a 2.5 h sleep.
+  - An output device change (to another 48 kHz device) kept playing.
+  - Two trackpads failed: the Magic Trackpad, over USB and Bluetooth, didn't play. The app only listened to `MTDeviceCreateDefault()` (the built-in one), found once at launch, though `MTDeviceCreateList()` lists both (built-in family 0x6d, Magic Trackpad 0x81).
+- **Fix:**
+  - The app listens to every device in the list, keyed by `MTDeviceGetDeviceID`, and rescans every 2 s. New or reconnected trackpads start playing; a device that stopped running is restarted.
+  - Touch ids become slot × 1000 + identifier, since ids are unique only per device.
+  - The callback is serialised with a mutex, because the engine queue has one producer.
+  - With no trackpad at launch, the "No trackpad found" screen now clears by itself when one is connected.
+- **Bug found along the way:** removing the hover indicator had also put "skip if not in contact" into the touch callback. That suppressed lift-off frames, so note-up came late and a lifting finger could start the resting mute. It shipped in 0.1 and is fixed.
+- **Hit strength per trackpad:**
+  - The Magic Trackpad 2 felt heavier on every hit. A touch's size is signal summed over the electrodes under it, and its electrodes are larger: 5.2 × 5.0 mm against 5.2 × 4.3 mm on the 14" MacBook Pro.
+  - Each device's touch sizes are now scaled by the reference electrode area (22.2 mm²) over its own, from `MTDeviceGetSensorDimensions` and `MTDeviceGetSensorSurfaceDimensions`, clamped 0.5–2. That gives ×1.00 for the built-in and ×0.85 for the Magic Trackpad 2, and needs no per-model list.
+  - The user confirmed it by feel.
+- **Released as 0.2.**

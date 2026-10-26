@@ -70,7 +70,11 @@ static void (*MTRegisterContactFrameCallback)(MTDeviceRef, MTFrameCallback);
 static void (*MTUnregisterContactFrameCallback)(MTDeviceRef, MTFrameCallback);
 static int (*MTDeviceStart)(MTDeviceRef, int);
 static int (*MTDeviceStop)(MTDeviceRef);
-static CFArrayRef (*MTDeviceCreateList)(void);   // optional: only used to log how many devices there are
+static CFArrayRef (*MTDeviceCreateList)(void);              // every multitouch device (built-in, Magic Trackpads)
+static int (*MTDeviceGetDeviceID)(MTDeviceRef, uint64_t*);   // stable per device, across reconnects
+static bool (*MTDeviceIsRunning)(MTDeviceRef);
+static int (*MTDeviceGetSensorDimensions)(MTDeviceRef, int* rows, int* cols);
+static int (*MTDeviceGetSensorSurfaceDimensions)(MTDeviceRef, int* width, int* height);   // 0.01 mm
 
 static bool loadMultitouch() {
     void* h = dlopen("/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport", RTLD_NOW);
@@ -81,6 +85,10 @@ static bool loadMultitouch() {
     MTDeviceStart = (int (*)(MTDeviceRef, int))dlsym(h, "MTDeviceStart");
     MTDeviceStop = (int (*)(MTDeviceRef))dlsym(h, "MTDeviceStop");
     MTDeviceCreateList = (CFArrayRef(*)(void))dlsym(h, "MTDeviceCreateList");
+    MTDeviceGetDeviceID = (int (*)(MTDeviceRef, uint64_t*))dlsym(h, "MTDeviceGetDeviceID");
+    MTDeviceIsRunning = (bool (*)(MTDeviceRef))dlsym(h, "MTDeviceIsRunning");
+    MTDeviceGetSensorDimensions = (int (*)(MTDeviceRef, int*, int*))dlsym(h, "MTDeviceGetSensorDimensions");
+    MTDeviceGetSensorSurfaceDimensions = (int (*)(MTDeviceRef, int*, int*))dlsym(h, "MTDeviceGetSensorSurfaceDimensions");
     if (!MTDeviceCreateDefault || !MTRegisterContactFrameCallback || !MTDeviceStart || !MTDeviceStop) {
         std::fprintf(stderr, "MultitouchSupport symbols missing\n");
         return false;
@@ -263,8 +271,10 @@ static std::atomic<bool> g_captured{false};
 // opens anyway and shows this instead of the pan, so a double-clicked app doesn't just vanish.
 struct StartupError { NSString* title; NSString* detail; };
 static StartupError g_error{nil, nil};
+static const StartupError kNoTrackpad{@"No trackpad found", @"morphion is played on a trackpad. Connect a Magic Trackpad and it will start."};
+static bool g_scanTrackpads = false;   // multitouch and audio are up: look for trackpads every 2 s
 
-struct UiTouch { float nx, ny, major, minor, angle, size; int state; };
+struct UiTouch { float nx, ny, major, minor, angle, size; int state; int device = 0; };
 static std::mutex g_uiMutex;
 static std::vector<UiTouch> g_uiTouches;
 static std::array<std::atomic<double>, 9> g_flashTime;
@@ -313,18 +323,44 @@ static void logEvent(const char* fmt, ...) {
 }
 static std::atomic<bool> g_logNextFrame{true};   // log the first touch frame at start and after each wake
 
-static int touchCallback(MTDeviceRef, const MTTouch* touches, int n, double, int) {
-    if (g_logNextFrame.exchange(false)) logEvent("touch frames arriving (%d contacts)", n);
+// Every trackpad gets a slot; touch ids are only unique per device, so a touch's id becomes
+// slot * 1000 + its identifier. Slots are written on the main thread, read here.
+constexpr int kMaxDevices = 8;
+static std::array<std::atomic<MTDeviceRef>, kMaxDevices> g_devSlot{};
+static std::mutex g_touchMutex;   // devices may call back on their own threads; the engine queue has one producer
+// A touch's size is its signal summed over the electrodes under it, so trackpads with larger
+// electrodes read heavier for the same finger. Each device's sizes are scaled by the electrode
+// area of the trackpad the force mapping was tuned on (a 14" MacBook Pro: 124.8 x 76.8 mm over
+// 24 x 18, 22.2 mm2) over its own (Magic Trackpad 2: 156.0 x 110.4 mm over 30 x 22, 26.1 mm2).
+static std::array<std::atomic<float>, kMaxDevices> g_devSizeScale{};
+constexpr double kRefElectrodeMm2 = (124.8 / 24) * (76.8 / 18);
+
+static float sizeScaleFor(MTDeviceRef d) {
+    int rows = 0, cols = 0, w = 0, h = 0;
+    if (!MTDeviceGetSensorDimensions || !MTDeviceGetSensorSurfaceDimensions) return 1.0f;
+    MTDeviceGetSensorDimensions(d, &rows, &cols);
+    MTDeviceGetSensorSurfaceDimensions(d, &w, &h);
+    if (rows <= 0 || cols <= 0 || w <= 0 || h <= 0) return 1.0f;
+    double area = (w / 100.0 / cols) * (h / 100.0 / rows);
+    return float(std::clamp(kRefElectrodeMm2 / area, 0.5, 2.0));
+}
+
+static int touchCallback(MTDeviceRef dev, const MTTouch* touches, int n, double, int) {
+    std::lock_guard<std::mutex> serial(g_touchMutex);
+    int slot = 0;
+    for (int k = 0; k < kMaxDevices; ++k) if (g_devSlot[k].load() == dev) { slot = k; break; }
+    if (g_logNextFrame.exchange(false)) logEvent("touch frames arriving from trackpad %d (%d contacts)", slot, n);
     bool live = g_captured.load();
-    for (auto& t : g_tracks) t.seen = false;
+    for (auto& t : g_tracks) if (t.id / 1000 == slot) t.seen = false;   // other devices' touches aren't in this frame
 
     for (int i = 0; i < n; ++i) {
-        const MTTouch& t = touches[i];
+        MTTouch t = touches[i];
+        t.identifier += slot * 1000;
+        t.size *= g_devSizeScale[slot].load(std::memory_order_relaxed);
         Track* tr = findTrack(t.identifier);
         if (!tr) continue;
         tr->seen = true;
         bool contact = (t.state == 3 || t.state == 4);
-        if (!contact) continue;   // hovering fingers aren't drawn
         float nx = t.normalized.pos.x, ny = t.normalized.pos.y;
 
         if (g_cfg.probe && (t.state != tr->state || tr->frames < 4)) {
@@ -370,17 +406,17 @@ static int touchCallback(MTDeviceRef, const MTTouch* touches, int n, double, int
     }
 
     for (auto& t : g_tracks) {
-        if (t.used && !t.seen) {
+        if (t.used && !t.seen && t.id / 1000 == slot) {
             if (t.down) g_engine.push({morphion::Event::Up, t.id, 0, 0, 0, 0, 0, 0});
             t.used = false;
         }
     }
 
     std::lock_guard<std::mutex> lock(g_uiMutex);
-    g_uiTouches.clear();
+    std::erase_if(g_uiTouches, [&](const UiTouch& u) { return u.device == slot; });
     for (int i = 0; i < n; ++i) {
         const MTTouch& t = touches[i];
-        g_uiTouches.push_back({t.normalized.pos.x, t.normalized.pos.y, t.majorAxis, t.minorAxis, t.angle, t.size, t.state});
+        g_uiTouches.push_back({t.normalized.pos.x, t.normalized.pos.y, t.majorAxis, t.minorAxis, t.angle, t.size, t.state, slot});
     }
     return 0;
 }
@@ -388,7 +424,65 @@ static int touchCallback(MTDeviceRef, const MTTouch* touches, int n, double, int
 // ---------------------------------------------------------------- audio
 
 static AudioUnit g_unit;
-static MTDeviceRef g_mtDev = nullptr;
+// Trackpads being listened to (main thread). Rescanned every 2 s, so a Magic Trackpad
+// connected (or reconnected) while the app runs starts playing.
+struct MtDevice { MTDeviceRef ref; uint64_t id; };
+static std::vector<MtDevice> g_devices;
+
+static uint64_t deviceId(MTDeviceRef d) {
+    uint64_t id = 0;
+    if (MTDeviceGetDeviceID) MTDeviceGetDeviceID(d, &id);
+    return id ? id : uint64_t(uintptr_t(d));
+}
+
+static void startDevice(MTDeviceRef d, int slot) {
+    CFRetain(d);
+    g_devSizeScale[slot] = sizeScaleFor(d);
+    g_devSlot[slot] = d;
+    MTRegisterContactFrameCallback(d, touchCallback);
+    MTDeviceStart(d, 0);
+    g_logNextFrame = true;
+}
+
+// Start any trackpad not yet playing, or one that stopped (unplugged and back). Returns the
+// number of trackpads playing.
+static int scanDevices() {
+    if (!MTDeviceCreateList) {   // fall back to the default device only
+        if (g_devices.empty()) {
+            if (MTDeviceRef d = MTDeviceCreateDefault()) {
+                startDevice(d, 0);
+                CFRelease(d);
+                g_devices.push_back({d, deviceId(d)});
+            }
+        }
+        return int(g_devices.size());
+    }
+    CFArrayRef list = MTDeviceCreateList();
+    if (!list) return int(g_devices.size());
+    for (CFIndex i = 0; i < CFArrayGetCount(list); ++i) {
+        MTDeviceRef d = (MTDeviceRef)CFArrayGetValueAtIndex(list, i);
+        uint64_t id = deviceId(d);
+        auto it = std::find_if(g_devices.begin(), g_devices.end(), [&](const MtDevice& m) { return m.id == id; });
+        if (it != g_devices.end()) {
+            bool running = !MTDeviceIsRunning || MTDeviceIsRunning(it->ref);
+            if (running) continue;
+            int slot = int(it - g_devices.begin());
+            MTUnregisterContactFrameCallback(it->ref, touchCallback);
+            MTDeviceStop(it->ref);
+            CFRelease(it->ref);
+            startDevice(d, slot);
+            it->ref = d;
+            logEvent("trackpad %d (id %llx) restarted, touch sizes x%.2f", slot, (unsigned long long)id, g_devSizeScale[slot].load());
+        } else if (g_devices.size() < size_t(kMaxDevices)) {
+            int slot = int(g_devices.size());
+            startDevice(d, slot);
+            g_devices.push_back({d, id});
+            logEvent("trackpad %d (id %llx) playing, touch sizes x%.2f", slot, (unsigned long long)id, g_devSizeScale[slot].load());
+        }
+    }
+    CFRelease(list);
+    return int(g_devices.size());
+}
 
 // Stop touch input and audio before the process exits. [NSApp run] never returns:
 // terminate: calls exit(), and static destructors (the engine) would otherwise run
@@ -397,9 +491,9 @@ static void shutdown() {
     static bool done = false;
     if (done) return;
     done = true;
-    if (g_mtDev) {
-        MTUnregisterContactFrameCallback(g_mtDev, touchCallback);
-        MTDeviceStop(g_mtDev);
+    for (auto& d : g_devices) {
+        MTUnregisterContactFrameCallback(d.ref, touchCallback);
+        MTDeviceStop(d.ref);
     }
     if (g_unit) {
         AudioOutputUnitStop(g_unit);
@@ -1115,6 +1209,13 @@ static double wobbleFor(float level, double maxPts) {
     [NSApp activateIgnoringOtherApps:YES];
     [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0 repeats:YES block:^(NSTimer*) { [view setNeedsDisplay:YES]; }];
 
+    // pick up trackpads connected (or reconnected) while running
+    if (g_scanTrackpads) {
+        [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(NSTimer*) {
+            if (scanDevices() > 0 && g_error.title == kNoTrackpad.title) g_error = {nil, nil};
+        }];
+    }
+
     // log sleep, wake and output-device changes, for the robustness tests
     NSNotificationCenter* wc = NSWorkspace.sharedWorkspace.notificationCenter;
     [wc addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil
@@ -1186,7 +1287,7 @@ static int snapshot(const char* dir) {
     view.settingsOpen = true;
     save(@"settings.png");
     view.settingsOpen = false;
-    g_error = {@"No trackpad found", @"morphion is played on a trackpad. Connect a Magic Trackpad and open morphion again."};
+    g_error = kNoTrackpad;
     save(@"error.png");
     g_error = {nil, nil};
     return 0;
@@ -1291,21 +1392,14 @@ int main(int argc, char** argv) {
     if (!loadMultitouch()) {
         g_error = {@"Can't read the trackpad",
                    @"morphion couldn't load macOS's multitouch support. This version of macOS may not be supported."};
-    } else if (!(g_mtDev = MTDeviceCreateDefault())) {
-        std::fprintf(stderr, "no multitouch device\n");
-        g_error = {@"No trackpad found", @"morphion is played on a trackpad. Connect a Magic Trackpad and open morphion again."};
     } else if (!startAudio()) {
         std::fprintf(stderr, "audio start failed\n");
-        g_mtDev = nullptr;   // never started, nothing to stop
         g_error = {@"No sound output", @"morphion couldn't start audio. Check your sound output in System Settings and open morphion again."};
     } else {
-        MTRegisterContactFrameCallback(g_mtDev, touchCallback);
-        MTDeviceStart(g_mtDev, 0);
-        long devices = -1;
-        if (MTDeviceCreateList) {
-            if (CFArrayRef list = MTDeviceCreateList()) { devices = CFArrayGetCount(list); CFRelease(list); }
-        }
-        logEvent("started: %ld multitouch device(s), playing the default one; audio at %.0f Hz", devices, g_sr);
+        g_scanTrackpads = true;
+        int n = scanDevices();
+        logEvent("started: %d trackpad(s) playing; audio at %.0f Hz", n, g_sr);
+        if (n == 0) g_error = kNoTrackpad;   // cleared when one appears (see the rescan timer)
     }
 
     @autoreleasepool {
