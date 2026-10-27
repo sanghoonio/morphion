@@ -577,7 +577,7 @@ static std::atomic<bool> g_playGo{false};    // the count-in is over: the player
 // Recording: the audio thread logs every event it hands the engine to g_take (drained on the
 // main thread, see drainTake), stamped with the sample where it took effect.
 struct Stamped { int64_t sample; morphion::Event e; };
-static morphion::SpscQueue<Stamped, 16384> g_takeQueue;
+static morphion::SpscQueue<Stamped, 65536> g_takeQueue;   // drained 60 times a second: minutes of headroom
 static std::atomic<bool> g_recording{false};
 static std::atomic<int> g_takeDropped{0};
 static int64_t g_pos = 0;   // audio thread: samples handed out since the engine was configured
@@ -739,7 +739,6 @@ struct Take {
     morphion::score::Settings settings;
     std::vector<Line> lines;
     std::vector<int> held;                 // fingers down in the take
-    int lost = 0;                          // events the queue had no room for: the take won't replay exactly
 };
 static Take g_take;
 
@@ -808,8 +807,7 @@ static std::string finishTake() {
     drainTake();
     g_take.on = false;
     std::vector<Line>& L = g_take.lines;
-    g_take.lost = g_takeDropped.load();
-    if (g_take.lost) logEvent("recording: %d events lost (queue full)", g_take.lost);
+    if (int lost = g_takeDropped.load()) logEvent("recording: %d events lost (queue full)", lost);
     logEvent("recording stopped: %zu events", L.size());
     if (L.empty()) return {};
     for (int f : g_take.held) {   // still down when recording stopped: lift them there
@@ -842,8 +840,7 @@ static void saveTake(NSWindow* window, const std::string& text) {
     NSSavePanel* panel = [NSSavePanel savePanel];
     panel.allowedContentTypes = @[ UTTypePlainText ];
     panel.nameFieldStringValue = [NSString stringWithFormat:@"%@-%@-%@.txt", scale, key, [df stringFromDate:[NSDate date]]];
-    panel.message = g_take.lost ? @"Some touches were lost while recording, so this take won't replay exactly."
-                                : @" ";   // blank: a sheet has no top margin without a message line
+    panel.message = @" ";   // blank: a sheet has no top margin without a message line
     NSString* body = [NSString stringWithUTF8String:text.c_str()];
     [panel beginSheetModalForWindow:window completionHandler:^(NSModalResponse r) {
         if (r != NSModalResponseOK) return;
@@ -883,7 +880,7 @@ static void playScore(NSURL* url, NSWindow* window) {
     NSString* name = url.lastPathComponent;
     auto fail = [&](NSString* why) {
         NSAlert* a = [NSAlert new];
-        a.messageText = [NSString stringWithFormat:@"Can't play %@", name];
+        a.messageText = [NSString stringWithFormat:@"Can't Play %@", name];
         a.informativeText = why;
         [a beginSheetModalForWindow:window completionHandler:nil];
     };
@@ -1430,7 +1427,7 @@ static void drawInfo(NSRect b) {
     if (self.settingsOpen) [self closeSettings];
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     panel.allowedContentTypes = @[ UTTypePlainText ];
-    panel.message = @"Open a score";
+    panel.message = @" ";   // blank: a sheet has no top margin without a message line
     [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse r) {
         if (r == NSModalResponseOK) playScore(panel.URL, self.window);
     }];

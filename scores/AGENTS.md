@@ -134,7 +134,7 @@ Recordings from the app use explicit fingers: `TIME down ID NOTE FORCE @X,Y rR c
 
 **Ornaments are a hand drummer's.** Flams and drags (two or three strokes on one note, often the ding), quick runs of ghost taps into a downbeat, short finger rolls swelling into an accent, a note clipped by a pressing finger, the ding and its octave struck by both hands a hair apart. They sit where sections meet and at the arrivals of the motif. Their timing stays fixed in seconds whatever the tempo: a flam's strokes are 20–30 ms apart, a drag's about 55 ms, a run of ghost taps about 50 ms, a finger roll 30–40 ms.
 
-**It is played with two hands.** Everything written has to fit two hands and a few fingers. Ordinary strokes stay within three at once, four in any quarter second and ten in any second, with sixteenths as the working speed. A flam, drag or finger roll on one note is a single motion of one hand and counts as one stroke; a roll lasts up to about 0.4 s.
+**It is played with two hands.** Everything written has to fit two hands and a few fingers, unless asked otherwise. Ordinary strokes stay within three at once, four in any quarter second and ten in any second, with sixteenths as the working speed. A flam, drag or finger roll on one note is a single motion of one hand and counts as one stroke; a roll lasts up to about 0.4 s.
 
 ## Generating a score
 
