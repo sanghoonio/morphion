@@ -1,13 +1,13 @@
 CXX ?= clang++
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -fobjc-arc
-FRAMEWORKS = -framework Cocoa -framework AudioToolbox -framework CoreAudio -framework IOKit
+FRAMEWORKS = -framework Cocoa -framework AudioToolbox -framework CoreAudio -framework IOKit -framework UniformTypeIdentifiers
 
 APP = build/morphion.app
 EXE = $(APP)/Contents/MacOS/morphion
 
 # The app bundle (icon, name in the Dock); build/morphion links to its executable so
 # command-line flags still work: mac/build/morphion --probe
-all: $(EXE) $(APP)/Contents/Info.plist $(APP)/Contents/Resources/AppIcon.icns build/morphion
+all: $(EXE) $(APP)/Contents/Info.plist $(APP)/Contents/Resources/AppIcon.icns $(APP)/Contents/Resources/score-guide.md build/morphion
 
 $(EXE): main.mm ../engine/morphion.cpp ../engine/morphion.h ../engine/score.cpp ../engine/score.h Info.plist
 	@mkdir -p $(dir $@)
@@ -18,6 +18,11 @@ $(APP)/Contents/Info.plist: Info.plist
 	cp $< $@
 
 $(APP)/Contents/Resources/AppIcon.icns: icon/AppIcon.icns
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+# the score guide, for the info panel's Copy guide for AI button
+$(APP)/Contents/Resources/score-guide.md: ../scores/AGENTS.md
 	@mkdir -p $(dir $@)
 	cp $< $@
 

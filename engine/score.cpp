@@ -9,18 +9,13 @@
 
 namespace morphion::score {
 
-Layout layout(int scale, int key, bool single) {
+Layout layout(int scale, int key) {
     Layout L;
     int ding = 45 + std::clamp(key, 0, 11);
     const ScaleDef& sc = kScales[std::clamp(scale, 0, kScaleCount - 1)];
-    if (single) {
-        L.count = 1;
-        L.midi[0] = ding + 12;
-    } else {
-        static const int zigzag[8] = {7, 6, 8, 3, 5, 0, 2, 1};
-        L.midi[4] = ding;
-        for (int i = 0; i < 8; ++i) L.midi[zigzag[i]] = ding + sc.semis[i];
-    }
+    static const int zigzag[8] = {7, 6, 8, 3, 5, 0, 2, 1};
+    L.midi[4] = ding;
+    for (int i = 0; i < 8; ++i) L.midi[zigzag[i]] = ding + sc.semis[i];
     for (int i = 0; i < L.count; ++i) L.freq[i] = 440.0 * std::pow(2.0, (L.midi[i] - 69) / 12.0);
     return L;
 }
@@ -127,7 +122,7 @@ bool parse(const std::string& text, Piece& out, std::string& error) {
     int lineNo = 0;
     bool sawEvent = false;
     int nextTapFinger = 1 << 30;   // short-form taps get ids no recording uses
-    Layout L = layout(p.settings.scale, p.settings.key, p.settings.single);
+    Layout L = layout(p.settings.scale, p.settings.key);
     bool layoutStale = false;
 
     auto fail = [&](const std::string& msg) {
@@ -170,10 +165,20 @@ bool parse(const std::string& text, Piece& out, std::string& error) {
                 int pc = pitchClass(val, k);
                 if (pc < 0 || k != val.size()) return fail("unknown key '" + val + "'");
                 s.key = (pc - 9 + 12) % 12;   // kKeys starts at A
-            } else if (key == "layout") {
-                if (val != "grid" && val != "single") return fail("layout is grid or single");
-                s.single = val == "single";
+            } else if (key == "reverb") {
+                int i = 0;
+                while (i < kReverbCount && val != kReverbs[i].name) ++i;
+                if (i == kReverbCount) {
+                    std::string names;
+                    for (const auto& r : kReverbs) names += (names.empty() ? "" : ", ") + std::string(r.name);
+                    return fail("unknown reverb '" + val + "' (" + names + ")");
+                }
+                s.reverb = i;
             } else {
+                static const char* numeric[] = {"gain", "sustain", "swell", "tilt", "gu", "gu_hz", "gap", "gap_2x",
+                                                "mute", "mute_floor", "stereo", "attack"};
+                if (std::find(std::begin(numeric), std::end(numeric), key) == std::end(numeric))
+                    return fail("unknown setting '" + key + "'");
                 if (!number(val, v)) return fail("'" + key + "' needs a number");
                 if (key == "gain") s.gain = float(v);
                 else if (key == "sustain") s.sustain = float(v);
@@ -195,7 +200,7 @@ bool parse(const std::string& text, Piece& out, std::string& error) {
 
         // event: TIME WHAT ...
         if (layoutStale) {
-            L = layout(p.settings.scale, p.settings.key, p.settings.single);
+            L = layout(p.settings.scale, p.settings.key);
             layoutStale = false;
         }
         sawEvent = true;
@@ -221,7 +226,7 @@ bool parse(const std::string& text, Piece& out, std::string& error) {
             std::string list;
             for (int x : m) list += (list.empty() ? "" : " ") + noteName(x, p.settings.key);
             return fail("'" + name + "' is not a note of this pan (" + kKeys[p.settings.key] + " " +
-                        kScales[p.settings.scale].name + (p.settings.single ? ", single" : "") + ": " + list + ")");
+                        kScales[p.settings.scale].name + ": " + list + ")");
         };
         auto num = [&](size_t i, double& v, const char* what) {
             if (i >= tok.size() || !number(tok[i], v)) {
@@ -325,15 +330,15 @@ bool parse(const std::string& text, Piece& out, std::string& error) {
 
 std::string write(const Piece& piece) {
     const Settings& s = piece.settings;
-    Layout L = layout(s.scale, s.key, s.single);
+    Layout L = layout(s.scale, s.key);
     std::string o = "# morphion " MORPHION_VERSION "\n";
-    o += std::string("scale = ") + kScales[s.scale].name + "\nkey = " + kKeys[s.key] +
-         "\nlayout = " + (s.single ? "single" : "grid") + "\n";
+    o += std::string("scale = ") + kScales[s.scale].name + "\nkey = " + kKeys[s.key] + "\n";
     auto kv = [&](const char* k, const std::string& v) { o += std::string(k) + " = " + v + "\n"; };
     auto dbl = [](double v) { char b[32]; auto r = std::to_chars(b, b + sizeof b, v); return std::string(b, r.ptr); };
     kv("gain", fmt(s.gain)); kv("sustain", fmt(s.sustain)); kv("swell", fmt(s.swell)); kv("tilt", fmt(s.tilt));
     kv("gu", fmt(s.gu)); kv("gu_hz", dbl(s.guHz)); kv("gap", dbl(s.gap)); kv("gap_2x", dbl(s.gap2x));
     kv("mute", fmt(s.mute)); kv("mute_floor", fmt(s.muteFloor)); kv("stereo", fmt(s.stereo)); kv("attack", fmt(s.attack));
+    kv("reverb", kReverbs[s.reverb].name);
     o += "\n";
     // fingers renumbered from 1, each down taking the smallest id not held by a finger still down
     std::vector<std::pair<int, int>> held;   // (id in the piece, id written)
@@ -370,7 +375,7 @@ std::string write(const Piece& piece) {
 
 void configure(Engine& engine, const Piece& piece) {
     const Settings& s = piece.settings;
-    Layout L = layout(s.scale, s.key, s.single);
+    Layout L = layout(s.scale, s.key);
     CouplingParams cp;
     cp.gapHz = s.gap;
     cp.gap2xHz = s.gap2x;
@@ -379,8 +384,9 @@ void configure(Engine& engine, const Piece& piece) {
     gp.f = s.guHz;
     FieldParams fp;
     fp.decayScale = s.sustain;
+    engine.reverb = s.reverb;
     engine.configure(kRate, std::vector<double>(L.freq, L.freq + L.count), fp, cp, gp);
-    for (int i = 0; i < L.count; ++i) engine.setFieldPan(i, s.single ? 0.0f : float(i % 3 - 1));
+    for (int i = 0; i < L.count; ++i) engine.setFieldPan(i, float(i % 3 - 1));
     engine.limiter = true;
     engine.gain = s.gain;
     engine.coupling = s.swell;

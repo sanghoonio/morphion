@@ -10,7 +10,7 @@
 "Bwom" is the octave starting well below the fundamental and swelling in over
 the first few hundred ms; "bom" is the octave there from the start and then
 fading. The printed numbers are octave level minus fundamental level (dB) at
-50 and 400 ms, from the model's mode envelopes. Every file is peak-normalised
+50 and 400 ms, from the model's mode envelopes. Every file is peak-normalized
 on its own, so compare character, not loudness.
 
 The "swell" renders (08-11) push the octave harder: stronger coupling so the
@@ -48,9 +48,9 @@ def model_items():
         ("01_model_bom", Strike(x=0.45, y=0.0, contact_ms=0.8, radius=0.1), 0.002, dict(t60=1.5),
          "octave spot, short contact, almost no coupling, octave decays faster than the fundamental"),
         ("02_model_mild_bwom", Strike(x=0.2, y=0.1), 0.008, {},
-         "fingertip, a little off centre, coupling 0.008"),
+         "fingertip, a little off center, coupling 0.008"),
         ("03_model_strong_bwom", PAD, 0.025, {},
-         "near centre, soft finger pad, firmer strike, coupling x3"),
+         "near center, soft finger pad, firmer strike, coupling x3"),
         ("04_model_overshoot", Strike(x=0.0, y=0.05), 0.04, {},
          "the old coupling (0.04): octave swells past the fundamental, too much"),
         ("08_model_swell_x5", PAD, 0.04, dict(out=0.8),

@@ -40,10 +40,10 @@ Written after composing `scores/celtic-minor-d-the-turning-stone.txt` using only
 - **The file format section** is complete and exact. My first parse succeeded. The note-error example ("check a file using a note that isn't on it") is a neat trick, though I could compute the D Celtic Minor notes from the semitone table instead.
 - **The semitone table, the worked examples and the zigzag layout diagram** were enough to place every note and predict which side it sounds from.
 - **"Harmony lives in the patterns"** was the most useful paragraph. "One note of the figure moves by a step" translated directly into a voicing table and a progression.
-- **The motif-development paragraph** gave a ready-made form: above, among, within, below, alone. The list of familiar transformations (sequence, inversion, cut to first interval, stretched, squeezed) plus "a fixed rhythm keeps it recognisable" told me exactly what to keep constant.
+- **The motif-development paragraph** gave a ready-made form: above, among, within, below, alone. The list of familiar transformations (sequence, inversion, cut to first interval, stretched, squeezed) plus "a fixed rhythm keeps it recognizable" told me exactly what to keep constant.
 - **The `hold` paragraph** with numbers (−5 dB at 150 ms, −10 dB at 300 ms) made clipped notes something I could design rather than guess.
 - **The Generating section** (16th = 15/B, a tempo curve integrated over beats, shared jitter for simultaneous notes, the three playability numbers) is the right level of detail for writing a generator.
-- **The render-length paragraph** explained the ending behaviour in advance, so a 70.7 s render from a 65.45 s last event was no surprise.
+- **The render-length paragraph** explained the ending behavior in advance, so a 70.7 s render from a 65.45 s last event was no surprise.
 
 ## What was missing, ambiguous or wrong
 
@@ -61,11 +61,11 @@ Written after composing `scores/celtic-minor-d-the-turning-stone.txt` using only
 9. **No guidance on level or headroom.** My climax (ding 0.88, D4 0.78, slap 0.72, all within 18 ms) peaked at −0.43 dBFS. The guide gives a force scale but doesn't say whether stacking accents can clip, whether `gain` should be lowered for dense climaxes, or what peak a normal piece reaches.
 10. **No way to audition, and nothing said about it.** An agent writing a score can't hear the render. The guide could suggest objective checks: section RMS to confirm the energy arc, peak level, and `--rewrite` to confirm notes. I did these on my own initiative.
 11. **Small points:**
-    - Humanising can push the first event below 0. The guide says "Times stay at 0 or later" but doesn't say whether the first event must be at exactly 0. Clamping worked.
+    - Humanizing can push the first event below 0. The guide says "Times stay at 0 or later" but doesn't say whether the first event must be at exactly 0. Clamping worked.
     - The `hold` numbers are given only for the ding. Do higher notes choke faster?
     - The breakdown's `set mute` needs resetting; the guide doesn't say that `set` persists until changed, though I assumed it does.
 
-## Judgement calls
+## Judgment calls
 
 - The file name `celtic-minor-d-...` for the two-word scale.
 - The swell for Celtic Minor, assumed to follow the interval rule.
@@ -79,7 +79,7 @@ Written after composing `scores/celtic-minor-d-the-turning-stone.txt` using only
 
 - No parse errors. The format section is good enough to get it right first time.
 - Playability violations: 6 strokes in 250 ms (the roll on top of the pattern) and 5 in 250 ms (a fill into a downbeat that carried both the ding and a motif note). The guide's numbers found them once I wrote a counter. It didn't say how to fix them, but the fixes were obvious: thin the pattern under ornaments and space the fill.
-- A self-inflicted error that the guide indirectly caught: my intro's "stretched" motif was evenly spaced. Rereading "a fixed rhythm keeps it recognisable" sent me back to fix it to 4:2:6 eighths.
+- A self-inflicted error that the guide indirectly caught: my intro's "stretched" motif was evenly spaced. Rereading "a fixed rhythm keeps it recognizable" sent me back to fix it to 4:2:6 eighths.
 
 ## Suggested edits
 

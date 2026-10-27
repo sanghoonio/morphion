@@ -18,7 +18,7 @@ Each mode n is a damped oscillator
     q_n'' + 2 sigma_n q_n' + omega_n^2 q_n = phi_n(x, y) F(t) - dV/dq_n
 
 - phi_n is the mode shape at the strike point, so strike position sets how
-  hard each mode is driven. Field coordinates are normalised so the elliptical
+  hard each mode is driven. Field coordinates are normalized so the elliptical
   field is the unit disc, x along the long axis.
 - F(t) is a Gaussian contact pulse of length tau (sd tau/6). Its impulse
   scales with force; tau sets brightness (long contact low-passes the strike).
@@ -28,7 +28,7 @@ Each mode n is a damped oscillator
 - V = k1 q1^2 q2 + k2 q1 q2 q3 couples fundamental -> octave -> twelfth
   (the 1:2 and 1:2:3 internal resonances in Monteil/Touze/Thomas). This makes
   the upper partials bloom in after the fundamental, more so on harder strikes,
-  and lets a dead-centre strike (where the octave and twelfth shapes are zero)
+  and lets a dead-center strike (where the octave and twelfth shapes are zero)
   still grow them.
 
 The nonlinear part is time-stepped per sample for the strikes plus a window
@@ -77,7 +77,7 @@ def shape_upper_b(x, y, a):
 
 
 def shape_upper_axi(x, y, a):
-    # axisymmetric upper mode, non-zero at the centre so centre strikes keep some attack
+    # axisymmetric upper mode, non-zero at the center so center strikes keep some attack
     return 1.0 - 3.0 * (x * x + y * y) - 1.5 * a * a
 
 
@@ -159,10 +159,10 @@ def render(f0, modes, strikes, p: Params):
         start = int(s.t * sr)
         length = max(2, int(round(tau * sr)))
         phi = [m.shape(s.x, s.y, s.radius) for m in modes]
-        impulse = s.force * w1  # so the fundamental reaches amplitude ~force at the centre
+        impulse = s.force * w1  # so the fundamental reaches amplitude ~force at the center
         c = p.contact_damping * (s.radius / 0.2) ** 2
         damp = [math.exp(-2.0 * c * ph * ph * dt) for ph in phi]
-        # Gaussian pulse (sd tau/6) normalised to the impulse; unlike a raised cosine it has no
+        # Gaussian pulse (sd tau/6) normalized to the impulse; unlike a raised cosine it has no
         # spectral nulls, which otherwise land on individual modes and notch them out
         g = [math.exp(-0.5 * ((i + 0.5 - length / 2) / (length / 6)) ** 2) for i in range(length)]
         pulse = [impulse * gi / (sum(g) * dt) for gi in g]
@@ -276,7 +276,7 @@ def demo_set():
     """(filename, strikes, note) for each render in the demo."""
     off = dict(x=0.2, y=0.1)
     items = [
-        ("01_pos_centre", [Strike(x=0.0, y=0.0)], "dead centre: fundamental, octave/twelfth only via coupling"),
+        ("01_pos_center", [Strike(x=0.0, y=0.0)], "dead center: fundamental, octave/twelfth only via coupling"),
         ("02_pos_octave_spot", [Strike(x=0.5, y=0.0)], "on the long axis: octave up"),
         ("03_pos_fifth_spot", [Strike(x=0.0, y=0.5)], "on the short axis: twelfth up"),
         ("04_pos_diagonal", [Strike(x=0.35, y=0.35)], "between: both, plus upper_b"),

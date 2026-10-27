@@ -56,6 +56,47 @@ struct GuParams {
     double otherWeight = 0.15;
 };
 
+// Reverb: dry, then rooms of increasing decay. A feedback delay
+// network (scripts/reverb_demo.py, where they were voiced): a 12 ms pre-delay, six early
+// reflections in the first ~30 ms (times scaled by size), then 8 delay lines mixed through a
+// Householder matrix, each losing level per pass so the tail falls 60 dB in about t60 and
+// through a one-pole low-pass so the highs die first (damp). Left-column notes enter from the
+// left, right from the right; the tail is wide. `wet` is the level added to the dry sound.
+struct ReverbDef { const char* name; double t60, size, wet, damp; };
+inline constexpr ReverbDef kReverbs[] = {
+    {"dry", 0, 0, 0, 0},
+    {"small", 0.5, 0.6, 0.30, 0.35},
+    {"medium", 1.0, 1.0, 0.30, 0.30},
+    {"hall", 2.2, 1.6, 0.32, 0.25},
+    {"stairwell", 3.0, 1.2, 0.38, 0.10},
+};
+inline constexpr int kReverbCount = int(sizeof(kReverbs) / sizeof(kReverbs[0]));
+
+class Reverb {
+public:
+    void configure(double sampleRate);   // allocates for the largest room
+    void set(int reverb);                // at once, clearing the tail (before a piece starts)
+    void request(int reverb);            // while playing: fade the old room out, clear, fade the new one in
+    bool active() const { return room_ > 0 || pending_ != room_; }
+    void process(double& l, double& r);  // adds the room to one stereo sample
+
+private:
+    static constexpr int kLines = 8, kEarly = 6;
+    double sr_ = 48000.0;
+    int room_ = 0, pending_ = 0;
+    double wet_ = 0.0, damp_ = 0.0;
+    double fade_ = 1.0, fadeStep_ = 0.0;   // the room's level while switching, 0..1
+    void apply(int reverb);
+    std::vector<float> histL_, histR_;   // the dry input, for the pre-delay and early reflections
+    size_t histPos_ = 0;
+    int pre_ = 0;                        // the pre-delay, samples
+    int early_[kEarly] = {};             // pre-delay plus each reflection's time, samples
+    std::vector<float> line_[kLines];
+    int len_[kLines] = {};
+    size_t pos_[kLines] = {};
+    double loss_[kLines] = {}, lp_[kLines] = {};
+};
+
 // The slap: a palm on the shell between the notes. Each part has a level so the mix can be
 // tuned by ear (render_test --slap-options). The defaults are a skin smack and a metallic ring
 // over a light thump. Set before audio starts.
@@ -177,7 +218,7 @@ public:
     void configure(double sampleRate, const std::vector<double>& fieldFreqs, const FieldParams& base,
                    const CouplingParams& coupling = {}, const GuParams& gu = {});
 
-    bool push(const Event& e) { return queue_.push(e); }   // any one non-audio thread
+    bool push(const Event& e) { return queue_.push(e); }   // one producer thread at a time
 
     // Audio thread: no allocation, no locks. Any frame count: the engine renders in fixed
     // kBlock-sample blocks and hands them out, so its output depends only on the events and
@@ -192,7 +233,7 @@ public:
     // settable from any thread while running
     std::atomic<float> gain{1.0f};           // a hard single strike peaks near -0.5 dBFS (just into the limiter knee)
     std::atomic<float> restStrength{0.6f};   // resting-finger damping relative to strike contact damping
-    std::atomic<float> restFloor{0.15f};     // damping anywhere on the field, as a fraction of the centre's
+    std::atomic<float> restFloor{0.15f};     // damping anywhere on the field, as a fraction of the center's
     // A trackpad tap keeps the finger down 40-75 ms where steel would bounce it off in 1-2 ms,
     // so a resting finger only starts muting after a grace period, then fades in.
     float restGraceMs = 50.0f;
@@ -204,18 +245,20 @@ public:
     std::atomic<float> coupling{1.0f};   // scales every link; settable from any thread
     std::atomic<float> attackLevel{1.0f};    // scales the strike click and shimmer (force-weighted), 0 = off
     // Stereo: each field (and its strikes' attack) is panned to pan[field] * stereoWidth, -1 left
-    // to +1 right, constant power normalised so a centred field is unchanged in both channels.
-    // The Gu cavity and the slap's shell knock and noise stay centred. 0 = mono.
+    // to +1 right, constant power normalized so a centered field is unchanged in both channels.
+    // The Gu cavity and the slap's shell knock and noise stay centered. 0 = mono.
     std::atomic<float> stereoWidth{0.0f};
     void setFieldPan(int field, float pan);   // after configure, before audio starts
     std::atomic<float> radiationTilt{0.0f};   // live override of FieldParams::radiationTilt
     SlapParams slapParams;                    // read when a slap lands; set before audio starts
+    std::atomic<int> reverb{0};               // index into kReverbs; a change clears the tail
     int fieldCount() const { return static_cast<int>(fields_.size()); }
     double fieldFreq(int i) const { return heard_[i]; }   // pitch heard, after link retuning
     const std::vector<Link>& links() const { return links_; }
     // How loudly each field (and each of its modes) is ringing, before the gain, updated once
     // per block. For drawing; readable from any thread.
     static constexpr int kMaxFields = 16;
+    float outputLevel() const { return outPeak_.load(std::memory_order_relaxed); }   // last block's peak, after the limiter
     float fieldLevel(int i) const { return i >= 0 && i < kMaxFields ? levels_[i].load(std::memory_order_relaxed) : 0.0f; }
     float modeLevel(int i, int n) const {
         return i >= 0 && i < kMaxFields ? modeLevels_[i * kModes + n].load(std::memory_order_relaxed) : 0.0f;
@@ -243,6 +286,9 @@ private:
     std::vector<double> heard_;
     float appliedTilt_ = 0.0f;
     std::vector<float> limDelay_, limDelayR_;    // lookahead lines, left and right
+    Reverb reverb_;
+    int appliedReverb_ = 0;
+    std::atomic<float> outPeak_{0.0f};
     std::vector<float> pan_;                     // per field, -1..1 at full width
     size_t limPos_ = 0;
     float limGain_ = 1.0f, limAttack_ = 0.0f, limRelease_ = 0.0f;

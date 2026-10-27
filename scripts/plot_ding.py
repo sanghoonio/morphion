@@ -9,7 +9,7 @@ attack and limiter included).
     uv run scripts/plot_ding.py             # writes scripts/renders/ding_plot.png
 
 Panels: the whole waveform, the first 40 ms (strike), a spectrogram, and the spectrum
-of the first second with the main partials labelled.
+of the first second with the main partials labeled.
 """
 
 from __future__ import annotations

@@ -9,7 +9,7 @@ description: Gear button next to Play opens an in-canvas settings pane for scale
 
 ## Goal
 
-A gear button next to Play opens a settings pane: choose the scale and key, and adjust the general settings that are now only command-line flags. Drawn in the app's own style (outlines, flat colours), not with macOS controls.
+A gear button next to Play opens a settings pane: choose the scale and key, and adjust the general settings that are now only command-line flags. Drawn in the app's own style (outlines, flat colors), not with macOS controls.
 
 ## Design
 
@@ -22,7 +22,7 @@ A gear button next to Play opens a settings pane: choose the scale and key, and 
   - Hijaz: D3 | A3 Bb3 C#4 D4 E4 F4 G4 A4
   - Pygmy: D3 | A3 C4 D4 E4 F4 A4 C5 D5 (built from the usual definition, minor pentatonic-like; no D chart from a maker found)
   - Integral: D3 | A3 Bb3 C4 D4 E4 F4 A4 C5 (Kurd without the G; same caveat)
-  - Chinese pentatonic (gong mode, major pentatonic): D3 | A3 B3 D4 E4 F#4 A4 B4 D5 (built from the mode; makers sell plain pentatonic pans but none labelled Chinese was found)
+  - Chinese pentatonic (gong mode, major pentatonic): D3 | A3 B3 D4 E4 F#4 A4 B4 D5 (built from the mode; makers sell plain pentatonic pans but none labeled Chinese was found)
 - **Key:** the ding's pitch, A2 up to G#3 (D3 now). The whole scale moves with it.
 - **Layout:** grid or single note.
 - **Volume:** slider (gain).
@@ -38,7 +38,7 @@ Choice rows are pill outlines with the selected one filled amber. Sliders are a 
 
 **Persistence.** Settings are saved with `NSUserDefaults` on change and loaded at launch. Command-line flags still override for that run.
 
-**Generalising the layout.** `kGridNames`/`kGridFreqs` become a current-layout table built from (scale, key), shared by touch mapping, drawing and the engine. The title, note names and the probe output read from it.
+**Generalizing the layout.** `kGridNames`/`kGridFreqs` become a current-layout table built from (scale, key), shared by touch mapping, drawing and the engine. The title, note names and the probe output read from it.
 
 ## Decisions & ownership
 
@@ -69,7 +69,7 @@ Choice rows are pill outlines with the selected one filled amber. Sliders are a 
   - The touch thread reads `g_single` and `g_sizeHard` atomics, plus layout names under `g_layoutMutex` for `--probe`.
   - `applyLiveSettings()` handles volume, mute, swell, balance and hit strength. `reconfigure()` stops the audio unit, rebuilds the layout and engine (links and cavity pre-tuning included), and restarts it. It runs for scale, key, layout, cavity and reset.
 - **UI:**
-  - A round gear button next to Play on the strip (SF Symbol `gearshape`, drawn in the strip's ink colour), amber on hover.
+  - A round gear button next to Play on the strip (SF Symbol `gearshape`, drawn in the strip's ink color), amber on hover.
   - The pane is drawn in the canvas: choice pills for scale (wrapping), key (one row) and layout; six sliders in two columns with value and hint; "Reset to defaults" and "Done".
   - Esc or a click outside closes it. Settings save on every change.
   - The window's minimum content size is 760 × 560 so the pane fits.

@@ -18,13 +18,13 @@ Three things for the 0.2 release:
 
 ### Stereo
 
-**Where each note sits.** Pan follows the grid column: left column left, middle column centre, right column right. The grid's zigzag already alternates ascending notes left and right like a real pan, so columns are a fair stand-in for the notes' real positions around the ding. The ding (middle) and the single-note layout are centred.
+**Where each note sits.** Pan follows the grid column: left column left, middle column center, right column right. The grid's zigzag already alternates ascending notes left and right like a real pan, so columns are a fair stand-in for the notes' real positions around the ding. The ding (middle) and the single-note layout are centered.
 
 **Width.** A new live setting, `stereoWidth` (0 = mono, 1 = side columns fully left and right). The pan of a side column is ±width.
 
-**Pan law.** Constant power, normalised so a centred note is unchanged: θ = (p + 1)·π/4, left = √2·cos θ, right = √2·sin θ. A centred note keeps exactly today's level in both channels, so the ding and the parity checks don't move. A side note at p = ±0.5 is +2.3 dB in its near channel and −5.3 dB in the far one, with the mono sum about −0.7 dB.
+**Pan law.** Constant power, normalized so a centered note is unchanged: θ = (p + 1)·π/4, left = √2·cos θ, right = √2·sin θ. A centered note keeps exactly today's level in both channels, so the ding and the parity checks don't move. A side note at p = ±0.5 is +2.3 dB in its near channel and −5.3 dB in the far one, with the mono sum about −0.7 dB.
 
-**What pans.** Each field's output, and each strike's attack (click and shimmer) with its field. Sympathetic notes ring at their own position, so the swell after a ding hit comes from the sides. The Gu cavity, the slap's shell knock and noise stay centred. The slap's faint rim strikes on every field pan with their fields.
+**What pans.** Each field's output, and each strike's attack (click and shimmer) with its field. Sympathetic notes ring at their own position, so the swell after a ding hit comes from the sides. The Gu cavity, the slap's shell knock and noise stay centered. The slap's faint rim strikes on every field pan with their fields.
 
 **Limiter.** Linked across channels: one gain from the louder channel's peak, applied to both, so a loud note on one side doesn't shift the image.
 
@@ -41,7 +41,7 @@ The pane goes from seven sliders to ten, five rows in its two columns. The rows 
 Each test notes whether touches still sound, whether there is audio, and anything in Console or the terminal.
 
 1. **Sleep and wake.** Play, close the lid or choose Sleep, wait 30 s, wake, play again. Also with the app sitting idle (not playing) during sleep.
-2. **Audio device changes.** While playing: plug in and remove wired headphones; connect and disconnect Bluetooth headphones (they switch the sample rate); pick a different output in Control Centre.
+2. **Audio device changes.** While playing: plug in and remove wired headphones; connect and disconnect Bluetooth headphones (they switch the sample rate); pick a different output in Control Center.
 3. **Two trackpads.** With a Magic Trackpad connected to a MacBook: which one plays? Disconnect and reconnect the Magic Trackpad while the app is open.
 
 The app's terminal output (run `mac/build/morphion` from Terminal) shows the stream format and link setup. I'll add a line logging device start, stop and wake, so the tests leave a trace.
@@ -55,18 +55,18 @@ The app's terminal output (run `mac/build/morphion` from Terminal) shows the str
 
 | Decision | Tag | Note |
 |---|---|---|
-| Default stereo width | user-owned, surfaced | On by default at 0.5 (side notes about 30° off centre), confirmed by the user. Changes how the app sounds for everyone who updates. |
-| Pan by grid column (L/C/R), ding centred | user-owned, surfaced | Confirmed by the user over placement by pitch. The zigzag already alternates notes left and right like a real pan, and rows don't change the pan. |
-| Pan law normalised to centre unity | AI-owned, defended | Keeps the ding and the parity checks exactly as they are. The cost is side notes slightly louder in their near channel. |
-| Linked stereo limiter | AI-owned, defended | Independent limiting would push the image towards the quieter side on loud hits. |
-| Gu, slap knock and noise centred | AI-owned, default | The cavity and the shell are under and around the whole pan. |
+| Default stereo width | user-owned, surfaced | On by default at 0.5 (side notes about 30° off center), confirmed by the user. Changes how the app sounds for everyone who updates. |
+| Pan by grid column (L/C/R), ding centered | user-owned, surfaced | Confirmed by the user over placement by pitch. The zigzag already alternates notes left and right like a real pan, and rows don't change the pan. |
+| Pan law normalized to center unity | AI-owned, defended | Keeps the ding and the parity checks exactly as they are. The cost is side notes slightly louder in their near channel. |
+| Linked stereo limiter | AI-owned, defended | Independent limiting would push the image toward the quieter side on loud hits. |
+| Gu, slap knock and noise centered | AI-owned, default | The cavity and the shell are under and around the whole pan. |
 | Slider ranges: click 0–2, slap 0–2, width 0–1, defaults 1 / 1 / 0.5 | AI-owned, default | 0 turns the click or slap off. 2 is double the current level, past which the limiter takes over. |
 | Robustness: test first, fix only what breaks | user-owned, surfaced | Your call ("4–6 we should test"). Fixes are listed as conditional. |
 | Settings pane rows tightened to 56 pt | silently implied → surfaced | Ten sliders need a fifth row. Otherwise the window's minimum size would have to grow. |
 
 ## What this changes elsewhere
 
-- **Engine output** becomes truly stereo. `process(left, right)` with right == nullptr (render_test, `--frames`) must still work: it gets the left channel or a mono mix. `render_test --kurd` (the parity path) sets width 0, so the Python checks compare like with like. The ding is centred, so even with width on its left channel equals today's mono.
+- **Engine output** becomes truly stereo. `process(left, right)` with right == nullptr (render_test, `--frames`) must still work: it gets the left channel or a mono mix. `render_test --kurd` (the parity path) sets width 0, so the Python checks compare like with like. The ding is centered, so even with width on its left channel equals today's mono.
 - **Saved settings** gain `stereoWidth`, `attackLevel` and `slapLevel`. Missing keys fall back to defaults, so existing saved settings load fine.
 - **Loudness:** at width 0.5, side notes are +2.3 dB in one channel, so loud chords on one side reach the limiter a little sooner. The sound is otherwise unchanged in level.
 - **Headphones vs speakers:** on laptop speakers, about 25 cm apart, width 0.5 is subtle. On headphones it's clear. That's a reason not to go wider by default.
@@ -77,7 +77,7 @@ The app's terminal output (run `mac/build/morphion` from Terminal) shows the str
 
 - **Engine:**
   - `stereoWidth` (atomic, default 0) and `setFieldPan()`.
-  - Each field's output and each strike's attack are panned with constant power, normalised to centre unity. The Gu, the shell knock and the noise stay centred.
+  - Each field's output and each strike's attack are panned with constant power, normalized to center unity. The Gu, the shell knock and the noise stay centered.
   - The limiter is linked across the channels.
   - With one output buffer, `process()` writes a mono mix, identical to either channel at width 0.
   - The slap force clamp is now 0–2.
@@ -87,7 +87,7 @@ The app's terminal output (run `mac/build/morphion` from Terminal) shows the str
   - The ding's slight difference is its sympathetic D4, which sits in the left column.
 - **App:**
   - Settings gain Stereo width (default 0.5), Strike click (`attackLevel`, default 1) and Slap (force 0.8 × level, default 1), saved and covered by Reset.
-  - Pans are set per grid column in `configureEngine`; the single-note layout is centred.
+  - Pans are set per grid column in `configureEngine`; the single-note layout is centered.
   - The pane has five slider rows at 60 pt and is up to 540 pt tall. The window's minimum content height went from 610 to 620.
 - **Listening:** `engine/build/render_test --stereo out.wav [WIDTH]` renders a phrase across the grid. Width 0, 0.5 and 1 are in `scripts/renders/stereo/`.
 - **Robustness logging:** run `mac/build/morphion` from Terminal. Timestamped lines on stderr show:
@@ -103,7 +103,7 @@ The app's terminal output (run `mac/build/morphion` from Terminal) shows the str
 - **Fix:**
   - The app listens to every device in the list, keyed by `MTDeviceGetDeviceID`, and rescans every 2 s. New or reconnected trackpads start playing; a device that stopped running is restarted.
   - Touch ids become slot × 1000 + identifier, since ids are unique only per device.
-  - The callback is serialised with a mutex, because the engine queue has one producer.
+  - The callback is serialized with a mutex, because the engine queue has one producer.
   - With no trackpad at launch, the "No trackpad found" screen now clears by itself when one is connected.
 - **Bug found along the way:** removing the hover indicator had also put "skip if not in contact" into the touch callback. That suppressed lift-off frames, so note-up came late and a lifting finger could start the resting mute. It shipped in 0.1 and is fixed.
 - **Hit strength per trackpad:**

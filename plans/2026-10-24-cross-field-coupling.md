@@ -2,7 +2,7 @@
 date: 2026-10-24
 status: in-progress
 model: Claude Opus 5.5
-description: Couple tone fields where one sits on another's harmonic, so a struck note makes its neighbours swell in (the bwom)
+description: Couple tone fields where one sits on another's harmonic, so a struck note makes its neighbors swell in (the bwom)
 ---
 
 # Cross-field coupling
@@ -34,7 +34,7 @@ No other pairs: the remaining fields don't land on a 2x or 3x of a lower field.
 
 **Coupling terms.**
 - 3x pairs: the chain from 3c, V = −k12 q1 q2 l1 on the source's fund and octave and the listener's fundamental. Back-reaction on the source included, so energy is conserved.
-- 2x pairs: no reference measured yet. First try the direct analogue of the in-field octave term, V = −k2x q1² l1. Its timing will differ from the chain (a one-step drive peaks earlier), so it gets its own A/B render before going into the engine.
+- 2x pairs: no reference measured yet. First try the direct analog of the in-field octave term, V = −k2x q1² l1. Its timing will differ from the chain (a one-step drive peaks earlier), so it gets its own A/B render before going into the engine.
 
 **Tuning.** `Engine::configure` finds pairs automatically from the field frequencies (any layout, ±30 cents) and retunes each listener to (source harmonic − gap). A listener with two sources is tuned to the lowest source; the other source gets whatever gap results (A4: 1.86 Hz from D3, 1.37 Hz from A3). One gap setting for all pairs.
 
@@ -113,7 +113,7 @@ It renders the A/B set for the user: D3 strike in the full layout, A3 strike, an
 - **2x gap set to 0.45 Hz** (user's pick) in `multi_field.py` (`GAP_2X_HZ`), `CouplingParams::gap2xHz` and the app's `--gap-2x` default. Parity re-checked: engine vs Python 0.99999.
 - **Bloom +2 dB via radiation tilt 0.3** (Python `RADIATION_TILT`, engine `FieldParams::radiationTilt`, reference D4 so D4 is unchanged). A4 swell after a ding strike: −29 dB at 250 ms (was −31 dB at 270 ms). D4 swell barely moves (−25 dB). Parity: engine vs Python 0.99998–0.99999; `one_field` check now runs with tilt 0, which is exact.
 - **Tilt lowered to 0.15** at the user's request: high notes sounded loud on MacBook speakers. A4 swell −30 dB at 257 ms.
-- **Balance flipped towards low notes:** tilt −0.2, with live keys `-`/`=` (steps of 0.05) and `--tilt`, shown in the title. Compensation: `K3X`/`k3x` 0.2 and `GAP_HZ`/`gapHz`/app `--gap` 1.3 Hz. Results after a ding strike: A4 swell −30 dB at 229 ms, D4 −24 dB at 419 ms. A3 strike → A4 −23 dB at 364 ms (was −19 dB at 314 ms; A4 now sits 0.8 Hz from A3's octave). Parity unchanged (0.99998–0.99999).
+- **Balance flipped toward low notes:** tilt −0.2, with live keys `-`/`=` (steps of 0.05) and `--tilt`, shown in the title. Compensation: `K3X`/`k3x` 0.2 and `GAP_HZ`/`gapHz`/app `--gap` 1.3 Hz. Results after a ding strike: A4 swell −30 dB at 229 ms, D4 −24 dB at 419 ms. A3 strike → A4 −23 dB at 364 ms (was −19 dB at 314 ms; A4 now sits 0.8 Hz from A3's octave). Parity unchanged (0.99998–0.99999).
 - **Tilt halved to −0.1** (user: −0.2 made D3 too strong). D3 +0.9 dB vs G4. A4 swell −29 dB at 229 ms; A3 → A4 −22 dB at 369 ms.
 - **Gu cavity** (`multi_field.Gu`, `default_gu`, `gu_detune`; engine `GuParams`, `guDetune`; app `--gu`, `--gu-hz`). One resonator, linearly coupled both ways to every fundamental, stepped in the same order as the fields. Pre-tuning solves the coupled system's frequencies (arrowhead secular equation, bisection plus fixed-point) so the ding sounds at 146.85 Hz and the cavity at 80.2 Hz. After a ding strike: A4 swell −30 dB at 250 ms, D4 −23 dB at 426 ms (no Gu: −29 dB at 229 ms, −24 dB at 419 ms). Parity: engine vs Python 0.99997–0.99998 with the Gu on; without it in Python the correlation drops to 0.32, so the engine's Gu is really there. `scripts/gu_test.py` re-rendered with pre-tuning. The single-field layout also gets the cavity (its one field counts as the ding).
 - **In-note bloom left at 0.025 / octave 0.5.** The user tried 0.032 / 0.6 (D4 fingertip octave −9.0 dB instead of −11.8 dB) and reverted it.

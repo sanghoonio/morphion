@@ -14,7 +14,7 @@
 // The first form renders one Field (compare with one_field.py). --kurd renders
 // one strike on the D Kurd 9 layout through the Engine with cross-field links
 // (compare with multi_field.py --check); field is the grid index, default 4 (D3).
-// Both write the raw output peak-normalised to 0.9, no limiter.
+// Both write the raw output peak-normalized to 0.9, no limiter.
 
 #include "morphion.h"
 #include "score.h"
@@ -109,7 +109,7 @@ static int slapDemo(int argc, char** argv) {
         engine.process(buf.data(), nullptr, 64);
         std::copy(buf.begin(), buf.begin() + std::min<size_t>(64, out.size() - n), out.begin() + n);
     }
-    writeWav(argv[2], out, sr);   // app levels, not normalised
+    writeWav(argv[2], out, sr);   // app levels, not normalized
     std::printf("wrote %s\n", argv[2]);
     return 0;
 }

@@ -22,36 +22,38 @@ open mac/build/morphion.app
 ## Playing
 
 - **Play** (or Return) starts playing. The cursor is frozen and hidden so taps land on the pan. **Esc** stops.
+- **R** while playing records. Press R again, or Esc, to stop: a save dialog asks where to put the take, as a score file (see Scores). Recording starts from a fresh pan, so anything still ringing is cut.
+- The **folder** next to Play (or ⌘O, or dropping a file on the window) plays a score file, after a 3, 2, 1 count-in, on the pan it was written for, with its settings, and draws its strikes and fingers. The trackpad is off meanwhile; Esc or Exit at the top right ends it, and your own pan and settings come back.
+- The **i** left of Play says what morphion is and explains playing, recording and score files, and its **Copy guide for AI** button copies `scores/AGENTS.md` (bundled in the app) to paste into a chat with an AI model.
 - Where you strike inside a note changes its tone. Harder hits are louder and brighter.
 - A finger left resting on a note mutes it, as on a real pan. Quick taps don't.
 - **Space** slaps the shell: a skin smack and a short metallic ring over a light thump from the cavity.
 - The **gear** next to Play opens settings:
   - scale: Kurd, Celtic Minor, Hijaz, Pygmy, Integral, Chinese Pentatonic
   - key
-  - layout: 3×3 grid or a single note
   - volume and sustain
-  - hit strength and resting mute
+  - reverb: dry, small room, medium room, hall or stairwell
+  - hit sensitivity and resting mute
   - sympathetic swell and low/high balance
   - Gu cavity
   - stereo width
   - strike click and slap loudness
 
-  Settings are saved between launches.
-
 ## The sound model
 
 - Each note is a set of resonant modes tuned like a handpan note: fundamental, octave and twelfth, plus a few upper modes. Energy flows from the fundamental into the octave over the first few hundred milliseconds (the bloom).
 - Notes that sit on another note's 2nd or 3rd harmonic are coupled to it and tuned slightly below that harmonic, so they swell in sympathy a beat after the lower note is struck.
-- The Gu, the hole in the bottom shell, is modelled as an air resonance under the ding. The notes are pre-tuned so they land on pitch with it coupled in.
+- The Gu, the hole in the bottom shell, is modeled as an air resonance under the ding. The notes are pre-tuned so they land on pitch with it coupled in.
 - A strike is a short force pulse whose length depends on how hard you hit. While the finger touches, it damps the note.
 - Notes are placed left to right by their column on the grid, the ding in the middle. Notes swelling in sympathy sound from their own side.
+- The reverb is a feedback delay network: a short pre-delay, a few early reflections, then a dense tail whose highs die first. Dry by default.
 - The output goes through a lookahead peak limiter that turns the level down rather than distorting it.
 
 The numbers come from published handpan measurements where they exist (see `docs/handpan-acoustics.md`).
 
 ## Scores
 
-A piece is a plain text file: the settings, then one line per strike, slap or setting change. It renders bit for bit at the engine's fixed 48 kHz, and is easy to write by hand or generate.
+A piece is a plain text file: the settings, then one line per strike, slap or setting change. It renders bit for bit at the engine's fixed 48 kHz, and is easy to write by hand or generate. Recordings from the app are score files too, and a recording plays back in the app or through `render_test` exactly as it sounded on the release that made it.
 
 ```
 # morphion 0.3
@@ -65,7 +67,9 @@ key = C#
 4.000   set stereo 0.8             # change a live setting
 ```
 
-The first line names the release that wrote the file. Header settings default to the app's (`scale`, `key`, `layout`, `gain`, `sustain`, `swell`, `tilt`, `gu`, `gu_hz`, `gap`, `gap_2x`, `mute`, `mute_floor`, `stereo`, `attack`); `set` changes the live ones mid-piece. Recordings use a full form with finger ids, slides and lifts (`down`, `move`, `up`); see `engine/score.h`. `scores/AGENTS.md` is a complete guide to writing scores, for people or AI agents. Anything a release doesn't know is an error naming the line, so files from other releases play whenever they only use what it knows.
+The engine always runs at 48 kHz; on an output device at another rate, macOS converts.
+
+The first line names the release that wrote the file. Header settings default to the app's (`scale`, `key`, `gain`, `sustain`, `swell`, `tilt`, `gu`, `gu_hz`, `gap`, `gap_2x`, `mute`, `mute_floor`, `stereo`, `attack`, `reverb`); `set` changes the live ones mid-piece. Recordings use a full form with finger ids, slides and lifts (`down`, `move`, `up`); see `engine/score.h`. `scores/AGENTS.md` is a complete guide to writing scores, for people or AI agents. Anything a release doesn't know is an error naming the line, so files from other releases play whenever they only use what it knows.
 
 ```
 make -C engine

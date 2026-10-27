@@ -49,15 +49,15 @@ inline constexpr int kScaleCount = int(sizeof(kScales) / sizeof(kScales[0]));
 inline constexpr const char* kKeys[12] = {"A", "Bb", "B", "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab"};
 inline constexpr const char* kNoteNames[12] = {"C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"};
 
-// The playable fields: grid fields are numbered row * 3 + col, rows top to bottom; the ding is
-// the centre and the 8 others zigzag upwards from the bottom middle (lowest) to the top middle
-// (highest), as on the D Kurd layout. The single layout is one field, the ding an octave up.
+// The playable fields, numbered row * 3 + col, rows top to bottom: the ding is the center and
+// the 8 others zigzag upwards from the bottom middle (lowest) to the top middle (highest), as
+// on the D Kurd layout.
 struct Layout {
     int count = 9;
     int midi[9] = {};
     double freq[9] = {};
 };
-Layout layout(int scale, int key, bool single);
+Layout layout(int scale, int key);
 std::string noteName(int midi);            // "C#4", with the app's spellings (C# Eb F# Ab Bb)
 std::string noteName(int midi, int key);   // spelled from the key's minor signature: G#3 in C#, Bb3 in D
 
@@ -65,7 +65,6 @@ std::string noteName(int midi, int key);   // spelled from the key's minor signa
 struct Settings {
     int scale = 0;              // [scale] index into kScales
     int key = 5;                // [key] index into kKeys: D
-    bool single = false;        // [layout] grid | single
     float gain = 1.0f;          // [gain]
     float sustain = 1.0f;       // [sustain] multiplies every decay time
     float swell = 1.0f;         // [swell] cross-field coupling
@@ -78,6 +77,7 @@ struct Settings {
     float muteFloor = 0.15f;    // [mute_floor]
     float stereo = 0.5f;        // [stereo] width
     float attack = 1.0f;        // [attack] strike click and shimmer
+    int reverb = 0;             // [reverb] index into kReverbs: dry small medium hall stairwell
 };
 
 struct Line {

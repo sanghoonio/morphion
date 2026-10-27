@@ -9,7 +9,7 @@ note outlines, amber for a struck note.
     uv run scripts/make_icon.py concepts       # mac/icon/concept_*.png (1024 px) to choose from
     uv run scripts/make_icon.py build NAME     # mac/icon/AppIcon.icns from concept NAME
 
-Shapes follow macOS's icon grid: a 1024 canvas with an 824 px rounded square centred in it.
+Shapes follow macOS's icon grid: a 1024 canvas with an 824 px rounded square centered in it.
 Drawn 4x larger and scaled down for smooth edges.
 """
 

@@ -43,7 +43,7 @@ std::array<double, kModes> modeShapes(double x, double y, double a) {
         y,                                       // (1,1)b twelfth: nodal line along the long axis
         x * x - y * y,
         2.0 * x * y,
-        1.0 - 3.0 * r2 - 1.5 * a * a,            // axisymmetric, non-zero at the centre
+        1.0 - 3.0 * r2 - 1.5 * a * a,            // axisymmetric, non-zero at the center
     };
 }
 
@@ -97,13 +97,13 @@ void Field::strike(double x, double y, double force, double contactMs, double ra
     double tau = contactMs / 1000.0 * std::pow(std::max(force, 0.05) / 0.7, -0.2);
     int length = std::max(2, static_cast<int>(std::lround(tau * sr_)));
 
-    // Gaussian pulse, sd = length/6, normalised so its integral is the impulse
+    // Gaussian pulse, sd = length/6, normalized so its integral is the impulse
     double sum = 0.0, half = length / 2.0, sd = length / 6.0;
     for (int i = 0; i < length; ++i) {
         double u = (i + 0.5 - half) / sd;
         sum += std::exp(-0.5 * u * u);
     }
-    double impulse = force * w1_;   // fundamental reaches amplitude ~force at the centre
+    double impulse = force * w1_;   // fundamental reaches amplitude ~force at the center
 
     double c = contactSigmaScale(radius);
     auto phi = modeShapes(x, y, radius);
@@ -299,6 +299,9 @@ void Engine::configure(double sampleRate, const std::vector<double>& fieldFreqs,
 
     sr_ = sampleRate;
     engineSr_ = sampleRate;
+    reverb_.configure(sampleRate);
+    appliedReverb_ = std::clamp(reverb.load(), 0, kReverbCount - 1);
+    reverb_.set(appliedReverb_);
     limDelay_.assign(std::max<size_t>(1, size_t(0.0015 * sampleRate)), 0.0f);
     limDelayR_.assign(limDelay_.size(), 0.0f);
     limPos_ = 0;
@@ -455,10 +458,10 @@ void Engine::slap(double force) {
     for (auto& f : fields_) f.strike(0.85, 0.0, force * sp.notes, 5.0, 0.6);
 }
 
-// A resting finger mutes most of the field, not just the very centre: the
+// A resting finger mutes most of the field, not just the very center: the
 // fundamental's damping stays near full out to about half way and falls off
-// towards the rim ((1 - r^4)^2 rather than the mode shape's (1 - r^2)^2), and
-// every mode gets at least restFloor of the centre's damping wherever the
+// toward the rim ((1 - r^4)^2 rather than the mode shape's (1 - r^2)^2), and
+// every mode gets at least restFloor of the center's damping wherever the
 // finger is. Tuned by feel on the trackpad, not measured.
 void Engine::updateRest(int field) {
     std::array<double, kModes> sigma{};
@@ -562,9 +565,15 @@ void Engine::renderBlock() {
         if (guOsc_) setGuTilt(tilt);
         appliedTilt_ = tilt;
     }
+    if (int r = std::clamp(reverb.load(std::memory_order_relaxed), 0, kReverbCount - 1); r != appliedReverb_) {
+        reverb_.request(r);
+        appliedReverb_ = r;
+    }
+    const bool reverbOn = reverb_.active();
+    float peak = 0.0f;
     double scale = coupling.load(std::memory_order_relaxed);
     float g = gain.load(std::memory_order_relaxed);
-    // pan gains for this block: constant power, normalised so a centred field is unchanged
+    // pan gains for this block: constant power, normalized so a centered field is unchanged
     const double width = std::clamp(double(stereoWidth.load(std::memory_order_relaxed)), 0.0, 1.0);
     const size_t nf = fields_.size();
     double gainL[kMaxFields], gainR[kMaxFields];
@@ -596,7 +605,7 @@ void Engine::renderBlock() {
                 fh += guCouple_[j] * fd.q(0);
             }
         }
-        double s = 0.0, panL = 0.0, panR = 0.0;   // centred, and panned left and right
+        double s = 0.0, panL = 0.0, panR = 0.0;   // centered, and panned left and right
         if (guOsc_) {
             double q = guProp_[0] * guQ_ + guProp_[1] * guV_;
             double v = guProp_[2] * guQ_ + guProp_[3] * guV_ + fh / sr_;
@@ -678,7 +687,9 @@ void Engine::renderBlock() {
             double v = fields_[j].tick();
             if (j < size_t(kMaxFields)) { panL += v * gainL[j]; panR += v * gainR[j]; }
         }
-        float yl = static_cast<float>(s + panL) * g, yr = static_cast<float>(s + panR) * g;   // s: the centred parts
+        double l = s + panL, r = s + panR;   // s: the centered parts
+        if (reverbOn) reverb_.process(l, r);   // the whole pan, in the room
+        float yl = static_cast<float>(l) * g, yr = static_cast<float>(r) * g;
         if (limiter) {   // linked: one gain from the louder channel, so loud hits don't shift the image
             constexpr float ceiling = 0.95f;
             const size_t L = limDelay_.size();
@@ -694,7 +705,9 @@ void Engine::renderBlock() {
         }
         blockL_[i] = yl;
         blockR_[i] = yr;
+        peak = std::max(peak, std::max(std::fabs(yl), std::fabs(yr)));
     }
+    outPeak_.store(peak, std::memory_order_relaxed);
     blockStart_ += kBlock;
     for (size_t i = 0; i < fields_.size() && i < size_t(kMaxFields); ++i) {
         double e = 0.0;
@@ -705,6 +718,101 @@ void Engine::renderBlock() {
         }
         levels_[i].store(float(std::sqrt(e)), std::memory_order_relaxed);
     }
+}
+
+namespace {
+constexpr double kReverbLineMs[8] = {29.7, 37.1, 41.1, 43.7, 53.1, 59.3, 67.9, 73.3};   // mutually prime-ish
+constexpr double kPreDelayMs = 12.0;
+struct Reflection { double ms, gain; int side; };
+constexpr Reflection kReflections[6] = {{7.0, 0.55, 0}, {11.3, 0.45, 1}, {16.9, 0.38, 0},
+                                        {23.1, 0.30, 1}, {29.6, 0.24, 0}, {31.7, 0.22, 1}};
+}  // namespace
+
+void Reverb::configure(double sampleRate) {
+    sr_ = sampleRate;
+    double maxSize = 0.0;
+    for (const auto& r : kReverbs) maxSize = std::max(maxSize, r.size);
+    double lastMs = 0.0;
+    for (const auto& f : kReflections) lastMs = std::max(lastMs, f.ms);
+    histL_.assign(size_t((kPreDelayMs + lastMs * maxSize) * 1e-3 * sr_) + 2, 0.0f);
+    histR_.assign(histL_.size(), 0.0f);
+    for (int i = 0; i < kLines; ++i) line_[i].assign(size_t(kReverbLineMs[i] * maxSize * 1e-3 * sr_) + 2, 0.0f);
+    fadeStep_ = 1.0 / (0.02 * sr_);   // 20 ms each way
+    set(0);
+}
+
+void Reverb::set(int reverb) {
+    apply(reverb);
+    pending_ = room_;
+    fade_ = 1.0;
+}
+
+void Reverb::request(int reverb) { pending_ = std::clamp(reverb, 0, kReverbCount - 1); }
+
+void Reverb::apply(int reverb) {
+    room_ = std::clamp(reverb, 0, kReverbCount - 1);
+    const ReverbDef& d = kReverbs[room_];
+    wet_ = d.wet;
+    damp_ = d.damp;
+    std::fill(histL_.begin(), histL_.end(), 0.0f);
+    std::fill(histR_.begin(), histR_.end(), 0.0f);
+    histPos_ = 0;
+    pre_ = int(std::lround(kPreDelayMs * 1e-3 * sr_));
+    for (int k = 0; k < kEarly; ++k) early_[k] = pre_ + int(kReflections[k].ms * d.size * 1e-3 * sr_);
+    for (int i = 0; i < kLines; ++i) {
+        std::fill(line_[i].begin(), line_[i].end(), 0.0f);
+        len_[i] = std::max(1, int(std::lround(kReverbLineMs[i] * d.size * 1e-3 * sr_)));
+        pos_[i] = 0;
+        loss_[i] = d.t60 > 0 ? std::pow(10.0, -3.0 * len_[i] / (d.t60 * sr_)) : 0.0;
+        lp_[i] = 0.0;
+    }
+}
+
+void Reverb::process(double& l, double& r) {
+    if (pending_ != room_) {   // switching: fade out, then start the new room empty and fade it in
+        fade_ -= fadeStep_;
+        if (fade_ <= 0.0) {
+            apply(pending_);
+            fade_ = 0.0;
+        }
+    } else if (fade_ < 1.0) {
+        fade_ = std::min(1.0, fade_ + fadeStep_);
+    }
+    if (room_ == 0) return;
+    const size_t H = histL_.size();
+    histL_[histPos_] = float(l);
+    histR_[histPos_] = float(r);
+    auto past = [&](const std::vector<float>& h, int d) { return double(h[(histPos_ + H - size_t(d)) % H]); };
+    const double inL = past(histL_, pre_), inR = past(histR_, pre_);   // pre-delayed
+    // early reflections, alternating sides, a little into the other side too
+    double eL = 0.0, eR = 0.0;
+    for (int k = 0; k < kEarly; ++k) {
+        const auto& f = kReflections[k];
+        double a = past(histL_, early_[k]), b = past(histR_, early_[k]);
+        if (f.side == 0) { eL += f.gain * a; eR += 0.3 * f.gain * b; }
+        else { eR += f.gain * b; eL += 0.3 * f.gain * a; }
+    }
+    histPos_ = (histPos_ + 1) % H;
+    // late tail: each line's output, damped, mixed through the Householder matrix and fed back
+    double o[kLines], sum = 0.0;
+    for (int i = 0; i < kLines; ++i) {
+        lp_[i] = loss_[i] * (1.0 - damp_) * line_[i][pos_[i]] + damp_ * lp_[i];
+        o[i] = lp_[i];
+        sum += o[i];
+    }
+    static constexpr double cL[kLines] = {1, -1, 1, -1, 1, -1, 1, -1};   // different signs per side:
+    static constexpr double cR[kLines] = {1, 1, -1, -1, 1, 1, -1, -1};   // a wide, uncorrelated tail
+    double tL = 0.0, tR = 0.0;
+    for (int i = 0; i < kLines; ++i) {
+        double in = o[i] - 2.0 / kLines * sum + (i % 2 == 0 ? inL : inR);   // even lines hear the left, odd the right
+        line_[i][pos_[i]] = float(in);
+        pos_[i] = (pos_[i] + 1) % size_t(len_[i]);
+        tL += cL[i] * o[i];
+        tR += cR[i] * o[i];
+    }
+    const double norm = 1.0 / std::sqrt(double(kLines));
+    l += fade_ * wet_ * (eL + tL * norm);
+    r += fade_ * wet_ * (eR + tR * norm);
 }
 
 }  // namespace morphion

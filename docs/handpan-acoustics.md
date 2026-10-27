@@ -30,7 +30,7 @@ Holographic frequencies are drive frequencies, accurate to a few Hz. Wessel 2008
 - Integral ding: 4th mode at 9.1× f0.
 - Ping C4: pairs at 2004/2066 Hz (7.6–7.9× f0) and 3725/3904 Hz (14–15×).
 
-**Material and geometry [M].** Gas-nitrided steel (600 °C in ammonia, then 15 min at 400 °C). Ding shell 50 cm diameter, 0.91–0.95 mm thick (Rohner & Schärer 2007); instrument about 52 × 24 cm. Modes stay localised in note regions, with confinement set by the curvature difference between note and bowl (Bryde & Mahadevan 2023, steelpan).
+**Material and geometry [M].** Gas-nitrided steel (600 °C in ammonia, then 15 min at 400 °C). Ding shell 50 cm diameter, 0.91–0.95 mm thick (Rohner & Schärer 2007); instrument about 52 × 24 cm. Modes stay localized in note regions, with confinement set by the curvature difference between note and bowl (Bryde & Mahadevan 2023, steelpan).
 
 **Relative amplitudes [M]** (Alon Table 4.1; struck at the fundamental sweet spot, mic 20–50 cm, dB relative to strongest peak, strike speed uncontrolled):
 
@@ -70,7 +70,7 @@ Coupling is partly **nonlinear** and grows with amplitude. Hang F3 ding driven a
 - **Mode splitting, steelpan** (Monteil et al. 2012): G3 octave and G4 fundamental form two global modes at 390.0 and 397.8 Hz (Δf/f ≈ 2.0%); at 4f1, 789.5 / 799.3 Hz (1.2%).
 - **Handpan beating** (Alon Table 4.3): 3.3 Hz at 662 Hz, 8.6 Hz at 438 Hz, 3.9 Hz at 248 Hz, 3.1 Hz at 373 Hz, 3.3 Hz at 374 Hz. Muting the other fields nearly removes it.
 - **Sympathetic peak strength** (Alon Table 4.5, D4 field): peaks from other fields are 13–22 dB stronger with those fields free than muted (B2 +21, F#3 +15, E4 +16, F#4 +15, B4 +13, F#5 +22).
-- **Bloom onset delays** (Alon Table 4.4, F#3 field): fundamental peaks within 23 ms; octave at 92 ms; 748 Hz component at 209 ms (92 ms with neighbours muted); 556 Hz at 510 ms (372 ms muted).
+- **Bloom onset delays** (Alon Table 4.4, F#3 field): fundamental peaks within 23 ms; octave at 92 ms; 748 Hz component at 209 ms (92 ms with neighbors muted); 556 Hz at 510 ms (372 ms muted).
 - **Nonlinear threshold, steelpan:** mode coupling switches on around amplitude h/25. Models with 1:2:2 and 1:2:4 internal resonance reproduce forced responses; a fitted 1:2:4 model reproduced a struck note's first four harmonics (Monteil et al. 2012; Thomas et al. 2014). [I] With h ≈ 0.93 mm that's about 40 µm, so handpans are probably in the coupled regime in normal playing.
 - Steelpan: "damping the B4 note produces a very noticeable change in the timbre of the B3 note" (Physics Today 1996).
 - Coupling is not reciprocal: it differs depending on which note of a pair is struck (Achong, via Alon). A steelpan video study saw the second harmonic decay fast then rise again about 90 ms later (arXiv 2102.00632).
@@ -123,7 +123,7 @@ Not found: measured finger contact duration or force on a handpan.
   - q̈₂,₃ + ω²q₂,₃ = ε[−2μq̇ − α₃,₄q₁²]
   - This structure produces the low-to-high energy transfer (bloom).
 - **Pianoteq Steelpans** (vendor): Steel Drum, Spacedrum, Hand Pan, Tank Drum. "Blooming energy" and "blooming inertia" controls; sustain pedal triggers the Gu resonance. Internals undisclosed.
-- **Buhr Audio Physical Modelling Handpan**, **SampleScience Virtual Handpan** (vendor): claim physical modelling with sympathetic resonance and shimmer controls; no technical detail.
+- **Buhr Audio Physical Modeling Handpan**, **SampleScience Virtual Handpan** (vendor): claim physical modeling with sympathetic resonance and shimmer controls; no technical detail.
 
 **General methods**
 
@@ -137,7 +137,7 @@ Not found: measured finger contact duration or force on a handpan.
 
 **Per tone field** (f0 = note frequency):
 
-| Mode | Freq | T60 | Gain at centre strike | Source |
+| Mode | Freq | T60 | Gain at center strike | Source |
 |---|---|---|---|---|
 | (0,1) fundamental | f0 | 2.5–4 s low/mid, 2–3 s high | 0 dB | Alon [M] |
 | (1,1)a octave | 2f0, ±5 c (good) or −10 to −35 c (rough) | 2–5 s, often ≥ fundamental below ~E4 | −3 dB (−11 to +2) | Alon, Morrison [M] |
@@ -147,9 +147,9 @@ Not found: measured finger contact duration or force on a handpan.
 
 Damping σ = π f / Q with Q 200–1200 [I].
 
-**Strike-position gains [I].** Mode-shape gains over the elliptical field: φ₀₁ ≈ 1 − r²; φ₁₁a ∝ x, φ₁₁b ∝ y in field coordinates. These reproduce Alon's +5 dB octave / +7 dB fifth shifts. On an elongated field the lower (1,1) mode (octave) likely has its nodal line across the long axis (standard elliptical-plate behaviour; not documented for handpans).
+**Strike-position gains [I].** Mode-shape gains over the elliptical field: φ₀₁ ≈ 1 − r²; φ₁₁a ∝ x, φ₁₁b ∝ y in field coordinates. These reproduce Alon's +5 dB octave / +7 dB fifth shifts. On an elongated field the lower (1,1) mode (octave) likely has its nodal line across the long axis (standard elliptical-plate behavior; not documented for handpans).
 
-**Linear coupling [I].** Global modal basis with coupled blocks wherever partials of different fields lie within ≈2% of each other. κ ≈ 0.003–0.02 (upper from Monteil's 2% split, lower from Alon's 3–9 Hz beats at 250–660 Hz). Diagonalise offline: each global mode then has shapes on several fields; the struck field sets excitation gain and every field contributes to radiation. Beating and the +13–22 dB sympathetic peaks fall out of the model.
+**Linear coupling [I].** Global modal basis with coupled blocks wherever partials of different fields lie within ≈2% of each other. κ ≈ 0.003–0.02 (upper from Monteil's 2% split, lower from Alon's 3–9 Hz beats at 250–660 Hz). Diagonalize offline: each global mode then has shapes on several fields; the struck field sets excitation gain and every field contributes to radiation. Beating and the +13–22 dB sympathetic peaks fall out of the model.
 
 **Nonlinear coupling [M]/[I].** Quadratic 1:2 internal-resonance terms: α q₁² driving the octave, α q₁q₂ back-reaction. Tune α so transfer starts around h/25 strike amplitude, giving an octave peak at ≈50–100 ms and later partials at ≈200–500 ms (Alon Table 4.4).
 
@@ -186,5 +186,5 @@ Damping σ = π f / Q with Q 200–1200 [I].
 - Chadwick, An, James, "Harmonic Shells", SIGGRAPH Asia 2009: https://www.cs.cornell.edu/projects/HarmonicShells/
 - Ducceschi & Touzé, JSV 344 (2015): https://perso.ensta-paris.fr/~touze/modalsynthesis.html
 - Serina et al., fingertip pulp, J. Biomech. (1997): https://www.coeh.berkeley.edu/publications/force-response-fingertip-pulp-repeated-compression-effects-loading-rate-loading-angle-and
-- Pianoteq Steelpans: https://www.modartt.com/steelpans ; Buhr Audio: https://buhraudio.com/blog/what-is-a-physical-modelling-handpan ; SampleScience: https://samplescience.gumroad.com/l/virtualhandpan
+- Pianoteq Steelpans: https://www.modartt.com/steelpans ; Buhr Audio: https://buhraudio.com/blog/what-is-a-physical-modeling-handpan ; SampleScience: https://samplescience.gumroad.com/l/virtualhandpan
 - Hang overview: https://en.wikipedia.org/wiki/Hang_(instrument) ; stainless vs nitrided (vendor): https://blog.masterthehandpan.com/stainless-steel-handpans-just-a-fad/
